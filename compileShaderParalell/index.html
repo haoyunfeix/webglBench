@@ -1,0 +1,354 @@
+<!doctype html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <title>PlayCanvas Shader Compile test</title>
+
+    <style>
+        body {
+            margin: 0;
+        }
+
+        #log {
+            margin: 16px;
+        }
+
+        @keyframes move {
+            0% { left: 0%; }
+            50% { left: calc(100% - 64px); }
+            100% { left: 0%; }
+        }
+
+        #block {
+            position: relative;
+            bottom: 0%;
+            left: 0%;
+            width: 32px;
+            height: 32px;
+            background-color: #07f;
+
+            animation-name: move;
+            animation-duration: 2000ms;
+            animation-iteration-count: infinite;
+        }
+        .container {
+            display: flex;
+            flex-wrap: wrap;
+        }
+        .button {
+            width: 260px
+        }
+    </style>
+</head>
+<body>
+    <pre id='log'></pre>
+
+    <canvas id='canvas' width='32' height='32' style='display:block;'></canvas>
+
+    <div id='block'></div>
+
+    <script>
+
+        function getParameterByName(name, url) {
+            if (!url) url = window.location.href;
+            name = name.replace(/[\[\]]/g, '\\$&');
+            var regex = new RegExp('[?&]' + name + '(=([^&#]*)|&|#|$)'),
+            results = regex.exec(url);
+            if (!results) return null;
+            if (!results[2]) return '';
+            return decodeURIComponent(results[2].replace(/\+/g, ' '));
+        };
+
+        var threads = getParameterByName('t');
+        if (!threads)
+        {
+            threads = 2;
+        }
+        else
+        {
+            threads = parseInt(threads);
+        }
+
+        var now = function() {
+            return new Date().toISOString();
+        };
+
+        // sourced from: http://webglreport.com/
+        function describeRange(value) {
+            return '[' + value[0] + ', ' + value[1] + ']';
+        }
+
+        function isPowerOfTwo(n) {
+            return (n !== 0) && ((n & (n - 1)) === 0);
+        }
+
+        function getAngle(gl) {
+            var lineWidthRange = describeRange(gl.getParameter(gl.ALIASED_LINE_WIDTH_RANGE));
+
+            // Heuristic: ANGLE is only on Windows, not in IE, and not in Edge, and does not implement line width greater than one.
+            var angle = ((navigator.platform === 'Win32') || (navigator.platform === 'Win64')) &&
+                (gl.getParameter(gl.RENDERER) !== 'Internet Explorer') &&
+                (gl.getParameter(gl.RENDERER) !== 'Microsoft Edge') &&
+                (lineWidthRange === describeRange([1,1]));
+
+            if (angle) {
+                // Heuristic: D3D11 backend does not appear to reserve uniforms like the D3D9 backend, e.g.,
+                // D3D11 may have 1024 uniforms per stage, but D3D9 has 254 and 221.
+                //
+                // We could also test for WEBGL_draw_buffers, but many systems do not have it yet
+                // due to driver bugs, etc.
+                if (isPowerOfTwo(gl.getParameter(gl.MAX_VERTEX_UNIFORM_VECTORS)) && isPowerOfTwo(gl.getParameter(gl.MAX_FRAGMENT_UNIFORM_VECTORS))) {
+                    return 'Yes, D3D11';
+                } else {
+                    return 'Yes, D3D9';
+                }
+            }
+
+            return 'No';
+        }
+
+        // code from: http://stackoverflow.com/a/2401861/1312722
+        function browserAndVersion() {
+            var ua = navigator.userAgent, tem, M = ua.match(/(opera|chrome|safari|firefox|msie|trident(?=\/))\/?\s*(\d+)/i) || [ ];
+            if(/trident/i.test(M[1])) {
+                tem = /\brv[ :]+(\d+)/g.exec(ua) || [ ];
+                return 'IE ' + (tem[1] || '');
+            }
+            if(M[1] === 'Chrome'){
+                tem = ua.match(/\b(OPR|Edge)\/(\d+)/);
+                if (tem != null) return tem.slice(1).join(' ').replace('OPR', 'Opera');
+            }
+            M = M[2] ? [ M[1], M[2] ] : [ navigator.appName, navigator.appVersion, '-?' ];
+            if ((tem = ua.match(/version\/(\d+)/i)) != null) M.splice(1, 1, tem[1]);
+            return M.join(' ');
+        };
+    </script>
+
+    <script>
+        var logElement = document.getElementById('log');
+
+        window.addEventListener('error', function(err) {
+            logElement.textContent += ' \n';
+            logElement.textContent += err.error.stack.replace(new RegExp(window.location.href, 'g'), '/') + '\n';
+        });
+
+        logElement.textContent += 'platform:\t' + navigator.platform + '\n';
+        logElement.textContent += 'browser:\t' + browserAndVersion() + '\n';
+        logElement.textContent += 'userAgent:\t' + navigator.userAgent + '\n';
+        logElement.textContent += ' \n';
+
+        var canvas = document.getElementById('canvas');
+        var gl = canvas.getContext('webgl2');
+        // Enable KHR_parallel_shader_compile extension
+        var ext = gl.getExtension('KHR_parallel_shader_compile');
+        if (ext) {
+            ext.maxShaderCompilerThreadsKHR(Math.max(2, threads));
+        }
+
+        if (gl) {
+            logElement.textContent += 'webgl2 context created' + '\n';
+            logElement.textContent += ' \n';
+
+            var debugInfo = gl.getExtension('WEBGL_debug_renderer_info');
+            if (debugInfo) {
+                var vendor = gl.getParameter(debugInfo.UNMASKED_VENDOR_WEBGL);
+                var renderer = gl.getParameter(debugInfo.UNMASKED_RENDERER_WEBGL);
+                logElement.textContent += 'GPU vendor:\t' + vendor + '\n';
+                logElement.textContent += 'GPU renderer:\t' + renderer + '\n';
+            } else {
+                logElement.textContent += 'no GPU data available' + '\n';
+            }
+
+            logElement.textContent += 'GPU ANGLE:\t' + getAngle(gl) + '\n';
+            logElement.textContent += ' \n';
+
+            var elapsedTotal = 0;
+            var elapsedTotalCompile = 0;
+            var elapsedTotalLink = 0;
+            var elapsedTotalParams = 0;
+
+            function insertRandomString(source) {
+                source.splice(1, 0, '// Random number ' + Math.random());
+            }
+
+            // once shader cache loaded
+            var onShaderLoad = function(raw) {
+                var arrayOfLines = raw.match(/[^\r\n]+/g);
+                var programs = [];
+                var currentProgram = {};
+                var currentShader;
+                var capturing = false;
+                for (var ii = 0; ii < arrayOfLines.length; ii++) {
+                    var cur = arrayOfLines[ii];
+                    if (cur.indexOf('CONST_SHADER_RECACHE') != -1) {
+                        cur = cur.replace('CONST_SHADER_RECACHE', Math.random())
+                    }
+                    if (cur == '__ENDPROGRAM__') {
+                        insertRandomString(currentShader);
+                        currentProgram['fragment'] = currentShader.join('\n');
+                        programs.push(currentProgram);
+                        currentProgram = {};
+                        currentShader = [];
+                        capturing = false;
+                    } else if (cur == '__VERTEXSHADER__') {
+                        currentShader = [];
+                        capturing = true;
+                    } else if (cur == '__FRAGMENTSHADER__') {
+                        insertRandomString(currentShader);
+                        currentProgram['vertex'] = currentShader.join('\n');
+                        currentShader = [];
+                        capturing = true;
+                    } else if (capturing) {
+                        currentShader.push(cur);
+                    }
+                }
+
+                logElement.textContent = '';
+                logElement.textContent += programs.length + ' programs found' + '\n';
+                logElement.textContent += 'starting compilations' + '\n';
+
+                // in next frame to get logs appear
+                requestAnimationFrame(function() {
+                    elapsedTotal = 0;
+                    elapsedTotalCompile = 0;
+                    elapsedTotalLink = 0;
+                    elapsedTotalParams = 0;
+                    var ps = [];
+                    var start = performance.now();
+                    for(var i = 0; i < programs.length; i++) {
+                        var program = makeProgram(programs[i], i);
+                        ps.push(program);
+                    }
+                    var checkCompletion = function() {
+                        var hasLinkingProgram = false;
+                        for (var i = 0; i < ps.length; i++) {
+                            if (ps[i])
+                            {
+                                var queryStart = performance.now();
+                                if (gl.getProgramParameter(ps[i], ext.COMPLETION_STATUS_KHR))
+                                {
+                                    ps[i] = null;
+                                }
+                                else
+                                {
+                                    hasLinkingProgram = true;
+                                }
+                            }
+                        }
+                        if (!hasLinkingProgram)
+                        {
+                            elapsedTotal = performance.now() - start; 
+                            document.getElementById('block').style.backgroundColor = '';
+
+                            logElement.textContent += ' ' + '\n';
+
+                            logElement.textContent += (Math.round(elapsedTotal * 100) / 100) + 'ms - shaders compiled, linked and parameters got in ' + '\n';
+                            logElement.textContent += ' ' + '\n';
+                            logElement.textContent += 'done' + '\n';
+                        }
+                        else
+                        {
+                            requestAnimationFrame(checkCompletion);
+                        }
+                    }
+
+                     requestAnimationFrame(checkCompletion);
+
+                    document.getElementById('block').style.backgroundColor = '';
+
+                    logElement.textContent += ' ' + '\n';
+                });
+            };
+
+            var makeProgram = function(definition, programNumber) {
+                var info, location, i;
+                var vShader = gl.createShader(gl.VERTEX_SHADER);
+                gl.shaderSource(vShader, definition['vertex']);
+                gl.compileShader(vShader);
+
+                // fragment shader compilation
+                var fShader = gl.createShader(gl.FRAGMENT_SHADER);
+                gl.shaderSource(fShader, definition['fragment']);
+                gl.compileShader(fShader);
+
+                // program
+                var program = gl.createProgram();
+                gl.attachShader(program, vShader);
+                gl.attachShader(program, fShader);
+
+                gl.linkProgram(program);
+
+                return program;
+            };
+
+            var loadShaderCache = function(file, name) {
+                document.getElementById('block').style.backgroundColor = '#f70';
+
+                // load shader cache
+                var xhr = new XMLHttpRequest();
+                xhr.addEventListener('load', function() {
+                    logElement = document.getElementById(name);
+                    logElement.style.display=''; // visiable
+
+                    requestAnimationFrame(function() {
+                        onShaderLoad(xhr.responseText);
+                    });
+                });
+                xhr.open('GET', file);
+                xhr.send();
+            };
+
+            function createElement(element, attribute, inner) {
+                if (typeof(element) === "undefined") {
+                  return false;
+                }
+                if (typeof(inner) === "undefined") {
+                  inner = "";
+                }
+                var el = document.createElement(element);
+                if (typeof(attribute) === 'object') {
+                  for (var key in attribute) {
+                    el.setAttribute(key, attribute[key]);
+                  }
+                }
+                if (!Array.isArray(inner)) {
+                  inner = [inner];
+                }
+                for (var k = 0; k < inner.length; k++) {
+                  if (inner[k].tagName) {
+                    el.appendChild(inner[k]);
+                  } else {
+                    el.appendChild(document.createTextNode(inner[k]));
+                  }
+                }
+                return el;
+              }
+              var container = createElement("div", {"class":"container"});
+              document.body.appendChild(container);
+
+              [{'location' : './aquarium/shader-cache.txt', 'name' : 'aquarium'},
+                  {'location' : './mathis-biabiany.fr/shader-cache.txt', 'name' : 'mathis-biabiany'},
+                  {'location' : './shadertoy-mona-lisa/shader-cache.txt', 'name' : 'shadertoy-mona-lisa'},
+                  {'location' : './raysupreme/shader-cache.txt', 'name' : 'raysupreme'},
+                  {'location' : './after-the-flood/shader-cache.txt', 'name' : 'after-the-flood'},
+                  {'location' : './jellyfish/shader-cache.txt', 'name' : 'jellyfish'},
+                  {'location' : './playkeepout/shader-cache.txt', 'name' : 'playkeepout'},
+                  {'location' : './cruciform/shader-cache.txt', 'name' : 'cruciform'},
+                  {'location' : './zoetrope/shader-cache.txt', 'name' : 'zoetrope'},
+                  {'location' : './letsplay/shader-cache.txt', 'name' : 'letsplay'},
+                  {'location' : './cyberpunk/shader-cache.txt', 'name' : 'cyberpunk'},
+                  {'location' : './bunny/shader-cache.txt', 'name' : 'bunny'},
+                  {'location' : './aquarium/shader-cache-56.txt', 'name' : 'aquarium-56'},
+                  {'location' : './aquarium/shader-cache-84.txt', 'name' : 'aquarium-84'},
+              ].forEach((arr) => {
+                  var tButton = createElement('button', {'class':'button','onclick':'loadShaderCache(\''+arr['location']+'\', \'' + arr['name'] + '\')'}, arr['name']);
+                  var tPrex = createElement("pre");
+                  var tPre = createElement("textarea",{"id":arr['name'], "rows":10, "cols": 30, "style": "display:none"});
+                  var tDivContainer = createElement("div",{"id":" "+ arr['name'] + "container"}, [tButton, tPrex, tPre]);
+                  container.appendChild(tDivContainer);
+              });
+        } else {
+            logElement.textContent += 'webgl2 context is not supported' + '\n';
+        }
+    </script>
+</body>

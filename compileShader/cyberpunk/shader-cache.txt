@@ -1,0 +1,5194 @@
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+#define SHADER_NAME earlyZ_Blend(Scheinwerfer)
+
+
+attribute vec4 Vertex;
+
+uniform float uDisplay2D;
+uniform float uPointSize;
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+uniform vec2 uGlobalTexRatio;
+uniform vec2 uGlobalTexSize;
+uniform vec3 uQVS;
+uniform vec3 uQVT;
+uniform vec4 uHalton;
+
+varying vec4 vViewVertex;
+
+
+
+void main() {
+// vars
+
+vec4 viewVertex; vec3 qVertex; mat4 jitteredProjection;
+
+// end vars
+
+qVertex = ((Vertex.xyz+ Vertex.w) * uQVS *vec3(1.2149026750224805e+0,7.49942715804305e+0,5.054857423285021e+0).yzx) + uQVT;
+viewVertex = uModelViewMatrix*vec4(qVertex.xyz, 1.);
+gl_PointSize = min(64.0, max(1.0, -uPointSize / viewVertex.z));
+jitteredProjection = uProjectionMatrix;
+jitteredProjection[2].xy += (1.0 - uDisplay2D) * (uHalton.xy * uGlobalTexRatio.xy / uGlobalTexSize.xy);
+gl_Position = jitteredProjection*viewVertex;
+vViewVertex = viewVertex;
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+__FRAGMENTSHADER__
+#version 100
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+#define SHADER_NAME earlyZ_Blend(Scheinwerfer)
+
+
+uniform float uOpacityFactor;
+uniform int uDrawOpaque;
+uniform vec2 uNearFar;
+
+varying vec4 vViewVertex;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+#define _linTest(color, keepLinear) { return keepLinear == 1 ? color : linearTosRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGBWithTest(const in float color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGBWithTest(const in vec3 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGBWithTest(const in vec4 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+float adjustSpecular( const in float specular, const in vec3 normal ) {
+    // Based on The Order : 1886 SIGGRAPH course notes implementation (page 21 notes)
+    float normalLen = length(normal);
+    if ( normalLen < 1.0) {
+        float normalLen2 = normalLen * normalLen;
+        float kappa = ( 3.0 * normalLen -  normalLen2 * normalLen )/( 1.0 - normalLen2 );
+        // http://www.frostbite.com/2014/11/moving-frostbite-to-pbr/
+        // page 91 : they use 0.5/kappa instead
+        return 1.0-min(1.0, sqrt( (1.0-specular) * (1.0-specular) + 1.0/kappa ));
+    }
+    return specular;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 normalTangentSpace(const in vec4 tangent, const in vec3 normal, const in vec3 texNormal) {
+    vec3 tang = vec3(0.0,1.0,0.0);
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // tang =  normalize(tangent.xyz);
+        tang =  tangent.xyz / l;
+    }
+    vec3 B = tangent.w * normalize(cross(normal, tang));
+    return normalize( texNormal.x * tang + texNormal.y * B + texNormal.z * normal);
+}
+
+//#pragma DECLARE_FUNCTION
+vec2 normalMatcap(const in vec3 normal, const in vec3 eyeVector) {
+    vec3 nm_x = vec3(-eyeVector.z, 0.0, eyeVector.x);
+    vec3 nm_y = cross(nm_x, eyeVector);
+    return vec2(dot(normal.xz, -nm_x.xz), dot(normal, nm_y)) * vec2(0.5)  + vec2(0.5);
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 textureNormalMap(const in vec3 normal, const in int flipY) {
+    vec3 rgb = normal * vec3(2.0) + vec3(-1.0); // MADD vec form
+    rgb[1] = flipY == 1 ? -rgb[1] : rgb[1];
+    return rgb;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 bumpMap(const in vec4 tangent, const in vec3 normal, const in vec2 gradient) {
+    vec3 outnormal;
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // vec3 tang =  normalize(tangent.xyz);
+        vec3 tang =  tangent.xyz / l;
+        vec3 binormal = tangent.w * normalize(cross(normal, tang));
+        outnormal = normal + gradient.x * tang + gradient.y * binormal;
+    }
+    else {
+       outnormal = vec3(normal.x + gradient.x, normal.y + gradient.y, normal.z);
+    }
+    return normalize(outnormal);
+}
+
+//#pragma DECLARE_FUNCTION
+float checkerboard(const in vec2 uv, const in vec4 halton) {
+    float taaSwap = step(halton.z, 0.0);
+    return mod(taaSwap + floor(uv.x) + floor(uv.y), 2.0);
+}
+
+// random links on packing :
+// cesium attributes packing
+// https://cesiumjs.org/2015/05/18/Vertex-Compression/
+
+// float packing in 24 bits or 32 bits
+// https://skytiger.wordpress.com/2010/12/01/packing-depth-into-color/
+
+//#pragma DECLARE_FUNCTION
+vec4 encodeDepthAlphaProfileScatter(const in float depth, const in float alpha, const in float profile, const in float scatter) {
+    vec4 pack = vec4(0.0);
+
+    // opacity in alpha
+    pack.a = alpha;
+
+    if(profile == 0.0) {
+        const vec3 code = vec3(1.0, 255.0, 65025.0);
+        pack.rgb = vec3(code * depth);
+        pack.gb = fract(pack.gb);
+        pack.rg -= pack.gb * (1.0 / 256.0);
+    } else {
+        // depth in rg
+        pack.g = fract(depth * 255.0);
+        pack.r = depth - pack.g / 255.0;
+
+        // scatter 6 bits
+        pack.b = floor(0.5 + scatter * 63.0) * 4.0 / 255.0;
+    }
+
+    // profile on 2 lower bits
+    pack.b -= mod(pack.b, 4.0 / 255.0);
+    pack.b += profile / 255.0; // 3 profile possible for sss
+
+    return pack;
+}
+
+int decodeProfile(const in vec4 pack) {
+    float packValue = floor(pack.b * 255.0 + 0.5);
+    // we extract the 2 lowest bits
+    float profile = mod(packValue, 2.0);
+    profile += mod(packValue - profile, 4.0);
+    return int(profile);
+}
+
+float decodeDepth(const in vec4 pack) {
+    if(decodeProfile(pack) == 0){
+        const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+        return dot(pack.rgb, decode);
+    }
+
+    return pack.r + pack.g / 255.0;
+}
+
+float decodeScatter(const in vec4 pack) {
+    float scatter = pack.b - mod(pack.b, 4.0 / 255.0);
+    return scatter * 255.0 / 4.0 / 63.0;
+}
+
+float decodeAlpha(const in vec4 pack) {
+    return pack.a;
+}
+
+float getLuminance(const in vec3 color) {
+    // http://stackoverflow.com/questions/596216/formula-to-determine-brightness-of-rgb-color
+    const vec3 colorBright = vec3(0.2126, 0.7152, 0.0722);
+    return dot(color, colorBright);
+}
+
+float distanceToDepth(const in sampler2D depth, const in vec2 uv, const in vec4 viewPos, const vec2 nearFar) {
+    float fragDepth = clamp( (-viewPos.z * viewPos.w - nearFar.x) / (nearFar.y - nearFar.x), 0.0, 1.0);
+    return fragDepth - decodeDepth(texture2D(depth, uv));
+}
+
+vec3 encode24(const in float x){
+    const vec3 code = vec3(1.0, 255.0, 65025.0);
+    vec3 pack = vec3(code * x);
+    pack.gb = fract(pack.gb);
+    pack.rg -= pack.gb * (1.0 / 256.0);
+    return pack;
+}
+
+float decode24(const in vec3 x) {
+    const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+    return dot(x, decode);
+}
+void main() {
+// vars
+
+float channelOpacity; float tmp_1 = float(1.0); vec4 tmp_4; float tmp_5; float tmp_8 = float(0.0); float tmp_9 = float(0.0); float tmp_10;
+
+// end vars
+
+channelOpacity = tmp_1*uOpacityFactor;
+if(uDrawOpaque == 1 && channelOpacity < 9.9999e-1) discard;
+tmp_5 = (-vViewVertex.z - uNearFar.x) / (uNearFar.y - uNearFar.x);
+tmp_10 = uDrawOpaque == 1 ? 1.0 : channelOpacity;
+tmp_4 = encodeDepthAlphaProfileScatter( tmp_5, tmp_10, tmp_8, tmp_9 );
+
+gl_FragColor = tmp_4;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+#define SHADER_NAME ShadowCastSkfb_Opaque(Schwarz)
+
+
+attribute vec4 Vertex;
+
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+uniform vec2 uShadowMapSize;
+uniform vec3 uQVS;
+uniform vec3 uQVT;
+uniform vec4 uHalton;
+
+varying vec4 vViewVertex;
+
+
+
+void main() {
+// vars
+
+const float floatWhite = float(1.0); mat4 jitteredProjection; vec4 viewVertex; vec3 qVertex;
+
+// end vars
+
+gl_PointSize = floatWhite;
+qVertex = ((Vertex.xyz+ Vertex.w) * uQVS *vec3(5.054857423285021e+0,1.2149026750224805e+0,7.49942715804305e+0).zxy) + uQVT;
+viewVertex = uModelViewMatrix*vec4(qVertex.xyz, 1.);
+jitteredProjection = uProjectionMatrix;
+float doPersp = jitteredProjection[3][3] == 0.0 ? 1.0 : 0.0;
+vec2 jitter = (abs(uHalton.z) == 2.0 ? 1.0 : 0.0) * (uHalton.xy / uShadowMapSize.xy);
+jitteredProjection[2].xy += doPersp * jitter;
+jitteredProjection[3].xy += (1.0 - doPersp) * jitter;
+gl_Position = jitteredProjection*viewVertex;
+vViewVertex = viewVertex;
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+__FRAGMENTSHADER__
+#version 100
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+#define SHADER_NAME ShadowCastSkfb_Opaque(Schwarz)
+#define _ATLAS_SHADOW
+#define _JITTER_OFFSET
+#define _PCFx1
+
+
+uniform vec4 uShadowDepthRange;
+
+varying vec4 vViewVertex;
+
+
+
+float decodeFloatRGBA( vec4 rgba ) {
+    return dot( rgba, vec4(1.0, 1.0/255.0, 1.0/65025.0, 1.0/16581375.0) );
+}
+
+vec4 encodeFloatRGBA( float v ) {
+    vec4 enc = vec4(1.0, 255.0, 65025.0, 16581375.0) * v;
+    enc = fract(enc);
+    enc -= enc.yzww * vec4(1.0/255.0,1.0/255.0,1.0/255.0,0.0);
+    return enc;
+}
+
+vec2 decodeHalfFloatRGBA( vec4 rgba ) {
+    return vec2(rgba.x + (rgba.y / 255.0), rgba.z + (rgba.w / 255.0));
+}
+
+vec4 encodeHalfFloatRGBA( vec2 v ) {
+    const vec2 bias = vec2(1.0 / 255.0, 0.0);
+    vec4 enc;
+    enc.xy = vec2(v.x, fract(v.x * 255.0));
+    enc.xy = enc.xy - (enc.yy * bias);
+
+    enc.zw = vec2(v.y, fract(v.y * 255.0));
+    enc.zw = enc.zw - (enc.ww * bias);
+    return enc;
+}
+
+
+//#pragma DECLARE_FUNCTION
+vec4 shadowCast(const in vec4 fragEye, const in vec2 shadowDepthRange){
+    // distance to camera (we make sure we are near 0 and in [0,1])
+    float depth = (-fragEye.z * fragEye.w - shadowDepthRange.x) / (shadowDepthRange.y - shadowDepthRange.x);
+
+#ifdef _FLOATTEX
+    return vec4(depth, 0.0, 0.0, 1.0);
+#else
+    return encodeFloatRGBA(depth);
+#endif
+}
+
+void main() {
+gl_FragColor = shadowCast( vViewVertex, uShadowDepthRange.rg );
+
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+#define SHADER_NAME earlyZ_Opaque(Schwarz)
+
+
+attribute vec4 Vertex;
+
+uniform float uDisplay2D;
+uniform float uPointSize;
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+uniform vec2 uGlobalTexRatio;
+uniform vec2 uGlobalTexSize;
+uniform vec3 uQVS;
+uniform vec3 uQVT;
+uniform vec4 uHalton;
+
+varying vec4 vViewVertex;
+
+
+
+void main() {
+// vars
+
+vec4 viewVertex; vec3 qVertex; mat4 jitteredProjection;
+
+// end vars
+
+qVertex = ((Vertex.xyz+ Vertex.w) * uQVS *vec3(5.054857423285021e+0,1.2149026750224805e+0,7.49942715804305e+0).zxy) + uQVT;
+viewVertex = uModelViewMatrix*vec4(qVertex.xyz, 1.);
+gl_PointSize = min(64.0, max(1.0, -uPointSize / viewVertex.z));
+jitteredProjection = uProjectionMatrix;
+jitteredProjection[2].xy += (1.0 - uDisplay2D) * (uHalton.xy * uGlobalTexRatio.xy / uGlobalTexSize.xy);
+gl_Position = jitteredProjection*viewVertex;
+vViewVertex = viewVertex;
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+__FRAGMENTSHADER__
+#version 100
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+#define SHADER_NAME earlyZ_Opaque(Schwarz)
+
+
+uniform vec2 uNearFar;
+
+varying vec4 vViewVertex;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+#define _linTest(color, keepLinear) { return keepLinear == 1 ? color : linearTosRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGBWithTest(const in float color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGBWithTest(const in vec3 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGBWithTest(const in vec4 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+float adjustSpecular( const in float specular, const in vec3 normal ) {
+    // Based on The Order : 1886 SIGGRAPH course notes implementation (page 21 notes)
+    float normalLen = length(normal);
+    if ( normalLen < 1.0) {
+        float normalLen2 = normalLen * normalLen;
+        float kappa = ( 3.0 * normalLen -  normalLen2 * normalLen )/( 1.0 - normalLen2 );
+        // http://www.frostbite.com/2014/11/moving-frostbite-to-pbr/
+        // page 91 : they use 0.5/kappa instead
+        return 1.0-min(1.0, sqrt( (1.0-specular) * (1.0-specular) + 1.0/kappa ));
+    }
+    return specular;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 normalTangentSpace(const in vec4 tangent, const in vec3 normal, const in vec3 texNormal) {
+    vec3 tang = vec3(0.0,1.0,0.0);
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // tang =  normalize(tangent.xyz);
+        tang =  tangent.xyz / l;
+    }
+    vec3 B = tangent.w * normalize(cross(normal, tang));
+    return normalize( texNormal.x * tang + texNormal.y * B + texNormal.z * normal);
+}
+
+//#pragma DECLARE_FUNCTION
+vec2 normalMatcap(const in vec3 normal, const in vec3 eyeVector) {
+    vec3 nm_x = vec3(-eyeVector.z, 0.0, eyeVector.x);
+    vec3 nm_y = cross(nm_x, eyeVector);
+    return vec2(dot(normal.xz, -nm_x.xz), dot(normal, nm_y)) * vec2(0.5)  + vec2(0.5);
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 textureNormalMap(const in vec3 normal, const in int flipY) {
+    vec3 rgb = normal * vec3(2.0) + vec3(-1.0); // MADD vec form
+    rgb[1] = flipY == 1 ? -rgb[1] : rgb[1];
+    return rgb;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 bumpMap(const in vec4 tangent, const in vec3 normal, const in vec2 gradient) {
+    vec3 outnormal;
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // vec3 tang =  normalize(tangent.xyz);
+        vec3 tang =  tangent.xyz / l;
+        vec3 binormal = tangent.w * normalize(cross(normal, tang));
+        outnormal = normal + gradient.x * tang + gradient.y * binormal;
+    }
+    else {
+       outnormal = vec3(normal.x + gradient.x, normal.y + gradient.y, normal.z);
+    }
+    return normalize(outnormal);
+}
+
+//#pragma DECLARE_FUNCTION
+float checkerboard(const in vec2 uv, const in vec4 halton) {
+    float taaSwap = step(halton.z, 0.0);
+    return mod(taaSwap + floor(uv.x) + floor(uv.y), 2.0);
+}
+
+// random links on packing :
+// cesium attributes packing
+// https://cesiumjs.org/2015/05/18/Vertex-Compression/
+
+// float packing in 24 bits or 32 bits
+// https://skytiger.wordpress.com/2010/12/01/packing-depth-into-color/
+
+//#pragma DECLARE_FUNCTION
+vec4 encodeDepthAlphaProfileScatter(const in float depth, const in float alpha, const in float profile, const in float scatter) {
+    vec4 pack = vec4(0.0);
+
+    // opacity in alpha
+    pack.a = alpha;
+
+    if(profile == 0.0) {
+        const vec3 code = vec3(1.0, 255.0, 65025.0);
+        pack.rgb = vec3(code * depth);
+        pack.gb = fract(pack.gb);
+        pack.rg -= pack.gb * (1.0 / 256.0);
+    } else {
+        // depth in rg
+        pack.g = fract(depth * 255.0);
+        pack.r = depth - pack.g / 255.0;
+
+        // scatter 6 bits
+        pack.b = floor(0.5 + scatter * 63.0) * 4.0 / 255.0;
+    }
+
+    // profile on 2 lower bits
+    pack.b -= mod(pack.b, 4.0 / 255.0);
+    pack.b += profile / 255.0; // 3 profile possible for sss
+
+    return pack;
+}
+
+int decodeProfile(const in vec4 pack) {
+    float packValue = floor(pack.b * 255.0 + 0.5);
+    // we extract the 2 lowest bits
+    float profile = mod(packValue, 2.0);
+    profile += mod(packValue - profile, 4.0);
+    return int(profile);
+}
+
+float decodeDepth(const in vec4 pack) {
+    if(decodeProfile(pack) == 0){
+        const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+        return dot(pack.rgb, decode);
+    }
+
+    return pack.r + pack.g / 255.0;
+}
+
+float decodeScatter(const in vec4 pack) {
+    float scatter = pack.b - mod(pack.b, 4.0 / 255.0);
+    return scatter * 255.0 / 4.0 / 63.0;
+}
+
+float decodeAlpha(const in vec4 pack) {
+    return pack.a;
+}
+
+float getLuminance(const in vec3 color) {
+    // http://stackoverflow.com/questions/596216/formula-to-determine-brightness-of-rgb-color
+    const vec3 colorBright = vec3(0.2126, 0.7152, 0.0722);
+    return dot(color, colorBright);
+}
+
+float distanceToDepth(const in sampler2D depth, const in vec2 uv, const in vec4 viewPos, const vec2 nearFar) {
+    float fragDepth = clamp( (-viewPos.z * viewPos.w - nearFar.x) / (nearFar.y - nearFar.x), 0.0, 1.0);
+    return fragDepth - decodeDepth(texture2D(depth, uv));
+}
+
+vec3 encode24(const in float x){
+    const vec3 code = vec3(1.0, 255.0, 65025.0);
+    vec3 pack = vec3(code * x);
+    pack.gb = fract(pack.gb);
+    pack.rg -= pack.gb * (1.0 / 256.0);
+    return pack;
+}
+
+float decode24(const in vec3 x) {
+    const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+    return dot(x, decode);
+}
+void main() {
+// vars
+
+vec4 tmp_0; float tmp_1; float tmp_4 = float(0.0); float tmp_5 = float(0.0); float tmp_6 = float(1.0);
+
+// end vars
+
+tmp_1 = (-vViewVertex.z - uNearFar.x) / (uNearFar.y - uNearFar.x);
+tmp_0 = encodeDepthAlphaProfileScatter( tmp_1, tmp_6, tmp_4, tmp_5 );
+
+gl_FragColor = tmp_0;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+#define SHADER_NAME earlyZ_Blend(Scheinwerfer)
+
+
+attribute vec4 Vertex;
+
+uniform float uDisplay2D;
+uniform float uPointSize;
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+uniform vec2 uGlobalTexRatio;
+uniform vec2 uGlobalTexSize;
+uniform vec3 uQVS;
+uniform vec3 uQVT;
+uniform vec4 uHalton;
+
+varying vec4 vViewVertex;
+
+
+
+void main() {
+// vars
+
+vec4 viewVertex; vec3 qVertex; mat4 jitteredProjection;
+
+// end vars
+
+qVertex = ((Vertex.xyz+ Vertex.w) * uQVS *vec3(1.2149026750224805e+0,7.49942715804305e+0,5.054857423285021e+0).yzx) + uQVT;
+viewVertex = uModelViewMatrix*vec4(qVertex.xyz, 1.);
+gl_PointSize = min(64.0, max(1.0, -uPointSize / viewVertex.z));
+jitteredProjection = uProjectionMatrix;
+jitteredProjection[2].xy += (1.0 - uDisplay2D) * (uHalton.xy * uGlobalTexRatio.xy / uGlobalTexSize.xy);
+gl_Position = jitteredProjection*viewVertex;
+vViewVertex = viewVertex;
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+__FRAGMENTSHADER__
+#version 100
+
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+#define SHADER_NAME earlyZ_Blend(Scheinwerfer)
+
+
+uniform float uOpacityFactor;
+uniform int uDrawOpaque;
+uniform vec2 uNearFar;
+
+varying vec4 vViewVertex;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+#define _linTest(color, keepLinear) { return keepLinear == 1 ? color : linearTosRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGBWithTest(const in float color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGBWithTest(const in vec3 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGBWithTest(const in vec4 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+float adjustSpecular( const in float specular, const in vec3 normal ) {
+    // Based on The Order : 1886 SIGGRAPH course notes implementation (page 21 notes)
+    float normalLen = length(normal);
+    if ( normalLen < 1.0) {
+        float normalLen2 = normalLen * normalLen;
+        float kappa = ( 3.0 * normalLen -  normalLen2 * normalLen )/( 1.0 - normalLen2 );
+        // http://www.frostbite.com/2014/11/moving-frostbite-to-pbr/
+        // page 91 : they use 0.5/kappa instead
+        return 1.0-min(1.0, sqrt( (1.0-specular) * (1.0-specular) + 1.0/kappa ));
+    }
+    return specular;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 normalTangentSpace(const in vec4 tangent, const in vec3 normal, const in vec3 texNormal) {
+    vec3 tang = vec3(0.0,1.0,0.0);
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // tang =  normalize(tangent.xyz);
+        tang =  tangent.xyz / l;
+    }
+    vec3 B = tangent.w * normalize(cross(normal, tang));
+    return normalize( texNormal.x * tang + texNormal.y * B + texNormal.z * normal);
+}
+
+//#pragma DECLARE_FUNCTION
+vec2 normalMatcap(const in vec3 normal, const in vec3 eyeVector) {
+    vec3 nm_x = vec3(-eyeVector.z, 0.0, eyeVector.x);
+    vec3 nm_y = cross(nm_x, eyeVector);
+    return vec2(dot(normal.xz, -nm_x.xz), dot(normal, nm_y)) * vec2(0.5)  + vec2(0.5);
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 textureNormalMap(const in vec3 normal, const in int flipY) {
+    vec3 rgb = normal * vec3(2.0) + vec3(-1.0); // MADD vec form
+    rgb[1] = flipY == 1 ? -rgb[1] : rgb[1];
+    return rgb;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 bumpMap(const in vec4 tangent, const in vec3 normal, const in vec2 gradient) {
+    vec3 outnormal;
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // vec3 tang =  normalize(tangent.xyz);
+        vec3 tang =  tangent.xyz / l;
+        vec3 binormal = tangent.w * normalize(cross(normal, tang));
+        outnormal = normal + gradient.x * tang + gradient.y * binormal;
+    }
+    else {
+       outnormal = vec3(normal.x + gradient.x, normal.y + gradient.y, normal.z);
+    }
+    return normalize(outnormal);
+}
+
+//#pragma DECLARE_FUNCTION
+float checkerboard(const in vec2 uv, const in vec4 halton) {
+    float taaSwap = step(halton.z, 0.0);
+    return mod(taaSwap + floor(uv.x) + floor(uv.y), 2.0);
+}
+
+// random links on packing :
+// cesium attributes packing
+// https://cesiumjs.org/2015/05/18/Vertex-Compression/
+
+// float packing in 24 bits or 32 bits
+// https://skytiger.wordpress.com/2010/12/01/packing-depth-into-color/
+
+//#pragma DECLARE_FUNCTION
+vec4 encodeDepthAlphaProfileScatter(const in float depth, const in float alpha, const in float profile, const in float scatter) {
+    vec4 pack = vec4(0.0);
+
+    // opacity in alpha
+    pack.a = alpha;
+
+    if(profile == 0.0) {
+        const vec3 code = vec3(1.0, 255.0, 65025.0);
+        pack.rgb = vec3(code * depth);
+        pack.gb = fract(pack.gb);
+        pack.rg -= pack.gb * (1.0 / 256.0);
+    } else {
+        // depth in rg
+        pack.g = fract(depth * 255.0);
+        pack.r = depth - pack.g / 255.0;
+
+        // scatter 6 bits
+        pack.b = floor(0.5 + scatter * 63.0) * 4.0 / 255.0;
+    }
+
+    // profile on 2 lower bits
+    pack.b -= mod(pack.b, 4.0 / 255.0);
+    pack.b += profile / 255.0; // 3 profile possible for sss
+
+    return pack;
+}
+
+int decodeProfile(const in vec4 pack) {
+    float packValue = floor(pack.b * 255.0 + 0.5);
+    // we extract the 2 lowest bits
+    float profile = mod(packValue, 2.0);
+    profile += mod(packValue - profile, 4.0);
+    return int(profile);
+}
+
+float decodeDepth(const in vec4 pack) {
+    if(decodeProfile(pack) == 0){
+        const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+        return dot(pack.rgb, decode);
+    }
+
+    return pack.r + pack.g / 255.0;
+}
+
+float decodeScatter(const in vec4 pack) {
+    float scatter = pack.b - mod(pack.b, 4.0 / 255.0);
+    return scatter * 255.0 / 4.0 / 63.0;
+}
+
+float decodeAlpha(const in vec4 pack) {
+    return pack.a;
+}
+
+float getLuminance(const in vec3 color) {
+    // http://stackoverflow.com/questions/596216/formula-to-determine-brightness-of-rgb-color
+    const vec3 colorBright = vec3(0.2126, 0.7152, 0.0722);
+    return dot(color, colorBright);
+}
+
+float distanceToDepth(const in sampler2D depth, const in vec2 uv, const in vec4 viewPos, const vec2 nearFar) {
+    float fragDepth = clamp( (-viewPos.z * viewPos.w - nearFar.x) / (nearFar.y - nearFar.x), 0.0, 1.0);
+    return fragDepth - decodeDepth(texture2D(depth, uv));
+}
+
+vec3 encode24(const in float x){
+    const vec3 code = vec3(1.0, 255.0, 65025.0);
+    vec3 pack = vec3(code * x);
+    pack.gb = fract(pack.gb);
+    pack.rg -= pack.gb * (1.0 / 256.0);
+    return pack;
+}
+
+float decode24(const in vec3 x) {
+    const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+    return dot(x, decode);
+}
+void main() {
+// vars
+
+float channelOpacity; float tmp_1 = float(1.0); vec4 tmp_4; float tmp_5; float tmp_8 = float(0.0); float tmp_9 = float(0.0); float tmp_10;
+
+// end vars
+
+channelOpacity = tmp_1*uOpacityFactor;
+if(uDrawOpaque == 1 && channelOpacity < 9.9999e-1) discard;
+tmp_5 = (-vViewVertex.z - uNearFar.x) / (uNearFar.y - uNearFar.x);
+tmp_10 = uDrawOpaque == 1 ? 1.0 : channelOpacity;
+tmp_4 = encodeDepthAlphaProfileScatter( tmp_5, tmp_10, tmp_8, tmp_9 );
+
+gl_FragColor = tmp_4;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+#define SHADER_NAME Environment
+attribute vec3 Vertex;
+uniform mat4 uModelViewMatrix;
+uniform mat4 uProjectionMatrix;
+
+uniform vec4 uHalton;
+uniform vec2 uGlobalTexSize;
+uniform vec2 uGlobalTexRatio;
+
+varying vec3 vLocalVertex;
+
+void main(void)
+{
+    vLocalVertex = Vertex.rgb;
+
+    mat4 projectionMatrix = uProjectionMatrix;
+    vec2 halt = uGlobalTexRatio.xy * uHalton.xy / uGlobalTexSize.xy;
+    projectionMatrix[2][0] += halt.x;
+    projectionMatrix[2][1] += halt.y;
+
+    gl_Position = (projectionMatrix * (uModelViewMatrix * vec4(Vertex, 1.0))).xyww;
+}
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+#define SHADER_NAME Environment
+varying vec3 vLocalVertex;
+
+// common stuffs
+uniform int uOutputLinear;
+uniform float uRGBMRange;
+
+uniform float uEnvironmentExposure;
+uniform float uBackgroundExposure;
+
+uniform vec3 uDiffuseSPH[9];
+uniform samplerCube uTexture0;
+uniform float uSize;
+uniform int uAmbient;
+
+uniform float uFrameModTaaSS;
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+vec3 cubemapSeamlessFixDirection(const in vec3 direction, const in float size ) {
+    vec3 dir = direction;
+    float scale = 1.0 - 1.0 / size;
+    // http://seblagarde.wordpress.com/2012/06/10/amd-cubemapgen-for-physically-based-rendering/
+    vec3 absDir = abs(dir);
+    float M = max(max(absDir.x, absDir.y), absDir.z);
+
+    if (absDir.x != M) dir.x *= scale;
+    if (absDir.y != M) dir.y *= scale;
+    if (absDir.z != M) dir.z *= scale;
+
+    return dir;
+}
+
+// seamless cubemap for background ( no lod )
+vec3 textureCubeFixed(const in samplerCube tex, const in vec3 direction, const in float scale ) {
+    // http://seblagarde.wordpress.com/2012/06/10/amd-cubemapgen-for-physically-based-rendering/
+    vec3 dir = cubemapSeamlessFixDirection( direction, scale);
+    return LUVToRGB( textureCube( tex, dir ) );
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 textureEnvironmentCube( const in samplerCube tex, const in mat3 envTransform, const in vec3 normal, const in vec3 eyeVector, const in vec2 texSize){
+    vec3 R = normalize((2.0 * clamp(dot(normal, eyeVector), 0.0, 1.0)) * normal - eyeVector);
+    return textureCubeFixed(tex, envTransform * R, texSize[0] );
+}
+
+#ifndef TEX_BUMP
+#define TEX_BUMP(tex, uv) 1.0
+#endif
+
+// Todo use #idfef and derivatives (dDFx, dDFy, fwidth) extension ?
+// float valuetexture2D(tex, uv);
+// return vec2(dFdx(value), dFdy(value));
+//#pragma DECLARE_FUNCTION
+vec2 textureGradient(in sampler2D tex, const in vec2 uv, const in vec2 texSize) {
+    vec2 invSize = 1.0 / texSize;
+    float dx = TEX_BUMP(tex, uv - vec2(invSize.x, 0.0)) - TEX_BUMP(tex, uv + vec2(invSize.x, 0.0));
+    float dy = TEX_BUMP(tex, uv - vec2(0.0, invSize.y)) - TEX_BUMP(tex, uv + vec2(0.0, invSize.y));
+    return vec2(dx, dy);
+}
+
+
+// white vs interleaved vs blue noise
+// https://blog.demofox.org/2017/10/31/animating-noise-for-integration-over-time/
+
+// to test in a shadertoy
+// https://www.shadertoy.com/view/lsdfD4
+
+// https://www.shadertoy.com/view/4djSRW
+// most combinations are possible : in[1,2,3] -> out[1,2,3]
+#define INT_SCALE1 .1031
+float pseudoRandom(const in vec2 fragCoord) {
+    vec3 p3  = fract(vec3(fragCoord.xyx) * INT_SCALE1);
+    p3 += dot(p3, p3.yzx + 19.19);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// https://github.com/EpicGames/UnrealEngine/blob/release/Engine/Shaders/Private/Random.ush#L27
+float interleavedGradientNoise(const in vec2 fragCoord, const in float frameMod) {
+    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+    return fract(magic.z * fract(dot(fragCoord.xy + frameMod * vec2(47.0, 17.0) * 0.695, magic.xy)));
+}
+
+// https://github.com/EpicGames/UnrealEngine/blob/release/Engine/Shaders/Private/MaterialTemplate.ush#L1863
+// we slighty change it by multiplying by 1.2 (to match with other noise), otherwise the range seems to be between [0 - 0.83]
+float ditheringNoise(const in vec2 fragCoord, const in float frameMod) {
+    // float fm = mod(frameMod, 2.0) == 0.0 ? 1.0 : -1.0;
+    float fm = frameMod;
+    float dither5 = fract((fragCoord.x + fragCoord.y * 2.0 - 1.5 + fm) / 5.0);
+    float noise = fract(dot(vec2(171.0, 231.0) / 71.0, fragCoord.xy));
+    return (dither5 * 5.0 + noise) * (1.2 / 6.0);
+}
+
+//#pragma DECLARE_FUNCTION
+void ditheringMaskingDiscard(
+    const in vec4 fragCoord,
+    const in int dithering,
+    const in float alpha,
+    const in float factor,
+
+    const in float thinLayer,
+
+    const in float frameMod,
+    const in vec2 nearFar,
+
+    const in vec4 halton) {
+
+    if (dithering != 1) {
+        if (alpha < factor) discard;
+        return;
+    }
+
+    float rnd;
+
+    if (thinLayer == 0.0) {
+        float linZ = (1.0 / fragCoord.w - nearFar.x) / (nearFar.y - nearFar.x);
+        float sliceZ = floor(linZ * 500.0) / 500.0;
+        rnd = interleavedGradientNoise(fragCoord.xy + sliceZ, frameMod);
+    } else {
+        rnd = pseudoRandom(fragCoord.xy + halton.xy * 1000.0 + fragCoord.z * (abs(halton.z) == 2.0 ? 1000.0 : 1.0));
+    }
+
+    if (alpha * factor < rnd) discard;
+}
+
+
+// sph env
+vec3 evaluateDiffuseSphericalHarmonics(const in vec3 s[9], const in vec3 n) {
+    // https://github.com/cedricpinson/envtools/blob/master/Cubemap.cpp#L523
+    vec3 result = (s[0]+s[1]*n.y+s[2]*n.z+s[3]*n.x+s[4]*n.y*n.x+s[5]*n.y*n.z+s[6]*(3.0*n.z*n.z-1.0)+s[7]*(n.z*n.x)+s[8]*(n.x*n.x-n.y*n.y));
+    return max(result, vec3(0.0));
+}
+
+void main(void) {
+
+    vec3 color;
+    if (uAmbient == 1) {
+        vec3 normal = normalize(vLocalVertex + (interleavedGradientNoise(gl_FragCoord.xy, uFrameModTaaSS) - 0.5) * 0.4);
+        color = evaluateDiffuseSphericalHarmonics(uDiffuseSPH, normal);
+    } else {
+        color = textureCubeFixed(uTexture0, normalize(vLocalVertex), uSize);
+    }
+
+    color *= uEnvironmentExposure * uBackgroundExposure;
+
+    if (uOutputLinear == 0 ) color = linearTosRGB(color);
+
+    gl_FragColor = encodeRGBM(color, uRGBMRange);
+}
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureDepth1
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureDepth;
+uniform vec2 uTextureDepthSize;
+uniform vec2 uTextureDepthRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureDepth(uv) (texture2D(TextureDepth, (min(uv, 1.0 - 1e+0 / uTextureDepthSize.xy)) * uTextureDepthRatio))
+
+
+
+#define _linTest(color, keepLinear) { return keepLinear == 1 ? color : linearTosRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGBWithTest(const in float color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGBWithTest(const in vec3 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGBWithTest(const in vec4 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+float adjustSpecular( const in float specular, const in vec3 normal ) {
+    // Based on The Order : 1886 SIGGRAPH course notes implementation (page 21 notes)
+    float normalLen = length(normal);
+    if ( normalLen < 1.0) {
+        float normalLen2 = normalLen * normalLen;
+        float kappa = ( 3.0 * normalLen -  normalLen2 * normalLen )/( 1.0 - normalLen2 );
+        // http://www.frostbite.com/2014/11/moving-frostbite-to-pbr/
+        // page 91 : they use 0.5/kappa instead
+        return 1.0-min(1.0, sqrt( (1.0-specular) * (1.0-specular) + 1.0/kappa ));
+    }
+    return specular;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 normalTangentSpace(const in vec4 tangent, const in vec3 normal, const in vec3 texNormal) {
+    vec3 tang = vec3(0.0,1.0,0.0);
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // tang =  normalize(tangent.xyz);
+        tang =  tangent.xyz / l;
+    }
+    vec3 B = tangent.w * normalize(cross(normal, tang));
+    return normalize( texNormal.x * tang + texNormal.y * B + texNormal.z * normal);
+}
+
+//#pragma DECLARE_FUNCTION
+vec2 normalMatcap(const in vec3 normal, const in vec3 eyeVector) {
+    vec3 nm_x = vec3(-eyeVector.z, 0.0, eyeVector.x);
+    vec3 nm_y = cross(nm_x, eyeVector);
+    return vec2(dot(normal.xz, -nm_x.xz), dot(normal, nm_y)) * vec2(0.5)  + vec2(0.5);
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 textureNormalMap(const in vec3 normal, const in int flipY) {
+    vec3 rgb = normal * vec3(2.0) + vec3(-1.0); // MADD vec form
+    rgb[1] = flipY == 1 ? -rgb[1] : rgb[1];
+    return rgb;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 bumpMap(const in vec4 tangent, const in vec3 normal, const in vec2 gradient) {
+    vec3 outnormal;
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // vec3 tang =  normalize(tangent.xyz);
+        vec3 tang =  tangent.xyz / l;
+        vec3 binormal = tangent.w * normalize(cross(normal, tang));
+        outnormal = normal + gradient.x * tang + gradient.y * binormal;
+    }
+    else {
+       outnormal = vec3(normal.x + gradient.x, normal.y + gradient.y, normal.z);
+    }
+    return normalize(outnormal);
+}
+
+//#pragma DECLARE_FUNCTION
+float checkerboard(const in vec2 uv, const in vec4 halton) {
+    float taaSwap = step(halton.z, 0.0);
+    return mod(taaSwap + floor(uv.x) + floor(uv.y), 2.0);
+}
+
+// random links on packing :
+// cesium attributes packing
+// https://cesiumjs.org/2015/05/18/Vertex-Compression/
+
+// float packing in 24 bits or 32 bits
+// https://skytiger.wordpress.com/2010/12/01/packing-depth-into-color/
+
+//#pragma DECLARE_FUNCTION
+vec4 encodeDepthAlphaProfileScatter(const in float depth, const in float alpha, const in float profile, const in float scatter) {
+    vec4 pack = vec4(0.0);
+
+    // opacity in alpha
+    pack.a = alpha;
+
+    if(profile == 0.0) {
+        const vec3 code = vec3(1.0, 255.0, 65025.0);
+        pack.rgb = vec3(code * depth);
+        pack.gb = fract(pack.gb);
+        pack.rg -= pack.gb * (1.0 / 256.0);
+    } else {
+        // depth in rg
+        pack.g = fract(depth * 255.0);
+        pack.r = depth - pack.g / 255.0;
+
+        // scatter 6 bits
+        pack.b = floor(0.5 + scatter * 63.0) * 4.0 / 255.0;
+    }
+
+    // profile on 2 lower bits
+    pack.b -= mod(pack.b, 4.0 / 255.0);
+    pack.b += profile / 255.0; // 3 profile possible for sss
+
+    return pack;
+}
+
+int decodeProfile(const in vec4 pack) {
+    float packValue = floor(pack.b * 255.0 + 0.5);
+    // we extract the 2 lowest bits
+    float profile = mod(packValue, 2.0);
+    profile += mod(packValue - profile, 4.0);
+    return int(profile);
+}
+
+float decodeDepth(const in vec4 pack) {
+    if(decodeProfile(pack) == 0){
+        const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+        return dot(pack.rgb, decode);
+    }
+
+    return pack.r + pack.g / 255.0;
+}
+
+float decodeScatter(const in vec4 pack) {
+    float scatter = pack.b - mod(pack.b, 4.0 / 255.0);
+    return scatter * 255.0 / 4.0 / 63.0;
+}
+
+float decodeAlpha(const in vec4 pack) {
+    return pack.a;
+}
+
+float getLuminance(const in vec3 color) {
+    // http://stackoverflow.com/questions/596216/formula-to-determine-brightness-of-rgb-color
+    const vec3 colorBright = vec3(0.2126, 0.7152, 0.0722);
+    return dot(color, colorBright);
+}
+
+float distanceToDepth(const in sampler2D depth, const in vec2 uv, const in vec4 viewPos, const vec2 nearFar) {
+    float fragDepth = clamp( (-viewPos.z * viewPos.w - nearFar.x) / (nearFar.y - nearFar.x), 0.0, 1.0);
+    return fragDepth - decodeDepth(texture2D(depth, uv));
+}
+
+vec3 encode24(const in float x){
+    const vec3 code = vec3(1.0, 255.0, 65025.0);
+    vec3 pack = vec3(code * x);
+    pack.gb = fract(pack.gb);
+    pack.rg -= pack.gb * (1.0 / 256.0);
+    return pack;
+}
+
+float decode24(const in vec3 x) {
+    const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+    return dot(x, decode);
+}
+
+uniform int uFirstDepth;
+
+
+// For some reasons it requires unpacking *and* repacking to avoid transition between mipmap
+vec4 depthMipmap() {
+    vec2 invSize = 1.0 / uTextureDepthSize;
+    vec4 depths;
+    vec2 offDepth = vec2(0.25, -0.25);
+    if (uFirstDepth == 1) {
+        depths.x = decodeDepth(TEXTURE_2D_TextureDepth(gTexCoord + offDepth.yy * invSize));
+        depths.y = decodeDepth(TEXTURE_2D_TextureDepth(gTexCoord + offDepth.xy * invSize));
+        depths.z = decodeDepth(TEXTURE_2D_TextureDepth(gTexCoord + offDepth.yx * invSize));
+        depths.w = decodeDepth(TEXTURE_2D_TextureDepth(gTexCoord + offDepth.xx * invSize));
+    } else {
+        depths.x = decode24(TEXTURE_2D_TextureDepth(gTexCoord + offDepth.yy * invSize).xyz);
+        depths.y = decode24(TEXTURE_2D_TextureDepth(gTexCoord + offDepth.xy * invSize).xyz);
+        depths.z = decode24(TEXTURE_2D_TextureDepth(gTexCoord + offDepth.yx * invSize).xyz);
+        depths.w = decode24(TEXTURE_2D_TextureDepth(gTexCoord + offDepth.xx * invSize).xyz);
+    }
+
+    return vec4(encode24(min(min(depths.x, depths.y), min(depths.z, depths.w))), 1.0);
+}
+
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = depthMipmap();
+
+
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureDepth1
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureMipmapDepth
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureDepth0;
+uniform sampler2D TextureDepth1;
+uniform sampler2D TextureDepth2;
+uniform sampler2D TextureDepth3;
+uniform sampler2D TextureDepth4;
+uniform sampler2D TextureDepth5;
+uniform vec2 uTextureDepth0Size;
+uniform vec2 uTextureDepth0Ratio;
+uniform vec2 uTextureDepth1Size;
+uniform vec2 uTextureDepth1Ratio;
+uniform vec2 uTextureDepth2Size;
+uniform vec2 uTextureDepth2Ratio;
+uniform vec2 uTextureDepth3Size;
+uniform vec2 uTextureDepth3Ratio;
+uniform vec2 uTextureDepth4Size;
+uniform vec2 uTextureDepth4Ratio;
+uniform vec2 uTextureDepth5Size;
+uniform vec2 uTextureDepth5Ratio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureDepth0(uv) (texture2D(TextureDepth0, (min(uv, 1.0 - 1e+0 / uTextureDepth0Size.xy)) * uTextureDepth0Ratio))
+#define TEXTURE_2D_TextureDepth1(uv) (texture2D(TextureDepth1, (min(uv, 1.0 - 1e+0 / uTextureDepth1Size.xy)) * uTextureDepth1Ratio))
+#define TEXTURE_2D_TextureDepth2(uv) (texture2D(TextureDepth2, (min(uv, 1.0 - 1e+0 / uTextureDepth2Size.xy)) * uTextureDepth2Ratio))
+#define TEXTURE_2D_TextureDepth3(uv) (texture2D(TextureDepth3, (min(uv, 1.0 - 1e+0 / uTextureDepth3Size.xy)) * uTextureDepth3Ratio))
+#define TEXTURE_2D_TextureDepth4(uv) (texture2D(TextureDepth4, (min(uv, 1.0 - 1e+0 / uTextureDepth4Size.xy)) * uTextureDepth4Ratio))
+#define TEXTURE_2D_TextureDepth5(uv) (texture2D(TextureDepth5, (min(uv, 1.0 - 1e+0 / uTextureDepth5Size.xy)) * uTextureDepth5Ratio))
+
+
+
+#define _linTest(color, keepLinear) { return keepLinear == 1 ? color : linearTosRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGBWithTest(const in float color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGBWithTest(const in vec3 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGBWithTest(const in vec4 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+float adjustSpecular( const in float specular, const in vec3 normal ) {
+    // Based on The Order : 1886 SIGGRAPH course notes implementation (page 21 notes)
+    float normalLen = length(normal);
+    if ( normalLen < 1.0) {
+        float normalLen2 = normalLen * normalLen;
+        float kappa = ( 3.0 * normalLen -  normalLen2 * normalLen )/( 1.0 - normalLen2 );
+        // http://www.frostbite.com/2014/11/moving-frostbite-to-pbr/
+        // page 91 : they use 0.5/kappa instead
+        return 1.0-min(1.0, sqrt( (1.0-specular) * (1.0-specular) + 1.0/kappa ));
+    }
+    return specular;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 normalTangentSpace(const in vec4 tangent, const in vec3 normal, const in vec3 texNormal) {
+    vec3 tang = vec3(0.0,1.0,0.0);
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // tang =  normalize(tangent.xyz);
+        tang =  tangent.xyz / l;
+    }
+    vec3 B = tangent.w * normalize(cross(normal, tang));
+    return normalize( texNormal.x * tang + texNormal.y * B + texNormal.z * normal);
+}
+
+//#pragma DECLARE_FUNCTION
+vec2 normalMatcap(const in vec3 normal, const in vec3 eyeVector) {
+    vec3 nm_x = vec3(-eyeVector.z, 0.0, eyeVector.x);
+    vec3 nm_y = cross(nm_x, eyeVector);
+    return vec2(dot(normal.xz, -nm_x.xz), dot(normal, nm_y)) * vec2(0.5)  + vec2(0.5);
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 textureNormalMap(const in vec3 normal, const in int flipY) {
+    vec3 rgb = normal * vec3(2.0) + vec3(-1.0); // MADD vec form
+    rgb[1] = flipY == 1 ? -rgb[1] : rgb[1];
+    return rgb;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 bumpMap(const in vec4 tangent, const in vec3 normal, const in vec2 gradient) {
+    vec3 outnormal;
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // vec3 tang =  normalize(tangent.xyz);
+        vec3 tang =  tangent.xyz / l;
+        vec3 binormal = tangent.w * normalize(cross(normal, tang));
+        outnormal = normal + gradient.x * tang + gradient.y * binormal;
+    }
+    else {
+       outnormal = vec3(normal.x + gradient.x, normal.y + gradient.y, normal.z);
+    }
+    return normalize(outnormal);
+}
+
+//#pragma DECLARE_FUNCTION
+float checkerboard(const in vec2 uv, const in vec4 halton) {
+    float taaSwap = step(halton.z, 0.0);
+    return mod(taaSwap + floor(uv.x) + floor(uv.y), 2.0);
+}
+
+// random links on packing :
+// cesium attributes packing
+// https://cesiumjs.org/2015/05/18/Vertex-Compression/
+
+// float packing in 24 bits or 32 bits
+// https://skytiger.wordpress.com/2010/12/01/packing-depth-into-color/
+
+//#pragma DECLARE_FUNCTION
+vec4 encodeDepthAlphaProfileScatter(const in float depth, const in float alpha, const in float profile, const in float scatter) {
+    vec4 pack = vec4(0.0);
+
+    // opacity in alpha
+    pack.a = alpha;
+
+    if(profile == 0.0) {
+        const vec3 code = vec3(1.0, 255.0, 65025.0);
+        pack.rgb = vec3(code * depth);
+        pack.gb = fract(pack.gb);
+        pack.rg -= pack.gb * (1.0 / 256.0);
+    } else {
+        // depth in rg
+        pack.g = fract(depth * 255.0);
+        pack.r = depth - pack.g / 255.0;
+
+        // scatter 6 bits
+        pack.b = floor(0.5 + scatter * 63.0) * 4.0 / 255.0;
+    }
+
+    // profile on 2 lower bits
+    pack.b -= mod(pack.b, 4.0 / 255.0);
+    pack.b += profile / 255.0; // 3 profile possible for sss
+
+    return pack;
+}
+
+int decodeProfile(const in vec4 pack) {
+    float packValue = floor(pack.b * 255.0 + 0.5);
+    // we extract the 2 lowest bits
+    float profile = mod(packValue, 2.0);
+    profile += mod(packValue - profile, 4.0);
+    return int(profile);
+}
+
+float decodeDepth(const in vec4 pack) {
+    if(decodeProfile(pack) == 0){
+        const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+        return dot(pack.rgb, decode);
+    }
+
+    return pack.r + pack.g / 255.0;
+}
+
+float decodeScatter(const in vec4 pack) {
+    float scatter = pack.b - mod(pack.b, 4.0 / 255.0);
+    return scatter * 255.0 / 4.0 / 63.0;
+}
+
+float decodeAlpha(const in vec4 pack) {
+    return pack.a;
+}
+
+float getLuminance(const in vec3 color) {
+    // http://stackoverflow.com/questions/596216/formula-to-determine-brightness-of-rgb-color
+    const vec3 colorBright = vec3(0.2126, 0.7152, 0.0722);
+    return dot(color, colorBright);
+}
+
+float distanceToDepth(const in sampler2D depth, const in vec2 uv, const in vec4 viewPos, const vec2 nearFar) {
+    float fragDepth = clamp( (-viewPos.z * viewPos.w - nearFar.x) / (nearFar.y - nearFar.x), 0.0, 1.0);
+    return fragDepth - decodeDepth(texture2D(depth, uv));
+}
+
+vec3 encode24(const in float x){
+    const vec3 code = vec3(1.0, 255.0, 65025.0);
+    vec3 pack = vec3(code * x);
+    pack.gb = fract(pack.gb);
+    pack.rg -= pack.gb * (1.0 / 256.0);
+    return pack;
+}
+
+float decode24(const in vec3 x) {
+    const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+    return dot(x, decode);
+}
+
+
+vec4 packMipmapDepth() {
+    vec4 result = vec4(0.0, 0.0, 0.0, 0.0);
+
+    // see _hookComposerResize in NodePostProcess.js (mipmap)
+    gTexCoord.y /= uTextureOutputRatio.y;
+
+    float levelLog = -log2(1.0 - gTexCoord.y) + 1.0;
+    float level = floor(levelLog) - 1.0;
+
+    float pLevel = pow(2.0, level + 1.0); // 2, 4, 8, 16...
+    gTexCoord.x = pLevel * gTexCoord.x * 0.5;
+    gTexCoord.y = pLevel * (1.0 - gTexCoord.y) - 1.0;
+
+    // unused part of the texture
+    if (gTexCoord.x > 1.0 || gTexCoord.y > 1.0) return result;
+
+    if (level < 0.1) result.rgba = vec4(encode24(decodeDepth(TEXTURE_2D_TextureDepth0(gTexCoord))), 1.0);
+    else if (level < 1.1) result.rgba = TEXTURE_2D_TextureDepth1(gTexCoord);
+    else if (level < 2.1) result.rgba = TEXTURE_2D_TextureDepth2(gTexCoord);
+    else if (level < 3.1) result.rgba = TEXTURE_2D_TextureDepth3(gTexCoord);
+    else if (level < 4.1) result.rgba = TEXTURE_2D_TextureDepth4(gTexCoord);
+    else if (level < 5.1) result.rgba = TEXTURE_2D_TextureDepth5(gTexCoord);
+
+    return result;
+}
+
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = packMipmapDepth();
+
+
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureMipmapDepth
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureSsaoExtract
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureMipmapDepth;
+uniform vec2 uTextureMipmapDepthSize;
+uniform vec2 uTextureMipmapDepthRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+#extension GL_OES_standard_derivatives : enable
+
+#define TEXTURE_2D_TextureDepth(uv) (texture2D(TextureDepth, (min(uv, 1.0 - 1e+0 / uTextureDepthSize.xy)) * uTextureDepthRatio))
+
+
+
+
+#define _linTest(color, keepLinear) { return keepLinear == 1 ? color : linearTosRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGBWithTest(const in float color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGBWithTest(const in vec3 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGBWithTest(const in vec4 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+float adjustSpecular( const in float specular, const in vec3 normal ) {
+    // Based on The Order : 1886 SIGGRAPH course notes implementation (page 21 notes)
+    float normalLen = length(normal);
+    if ( normalLen < 1.0) {
+        float normalLen2 = normalLen * normalLen;
+        float kappa = ( 3.0 * normalLen -  normalLen2 * normalLen )/( 1.0 - normalLen2 );
+        // http://www.frostbite.com/2014/11/moving-frostbite-to-pbr/
+        // page 91 : they use 0.5/kappa instead
+        return 1.0-min(1.0, sqrt( (1.0-specular) * (1.0-specular) + 1.0/kappa ));
+    }
+    return specular;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 normalTangentSpace(const in vec4 tangent, const in vec3 normal, const in vec3 texNormal) {
+    vec3 tang = vec3(0.0,1.0,0.0);
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // tang =  normalize(tangent.xyz);
+        tang =  tangent.xyz / l;
+    }
+    vec3 B = tangent.w * normalize(cross(normal, tang));
+    return normalize( texNormal.x * tang + texNormal.y * B + texNormal.z * normal);
+}
+
+//#pragma DECLARE_FUNCTION
+vec2 normalMatcap(const in vec3 normal, const in vec3 eyeVector) {
+    vec3 nm_x = vec3(-eyeVector.z, 0.0, eyeVector.x);
+    vec3 nm_y = cross(nm_x, eyeVector);
+    return vec2(dot(normal.xz, -nm_x.xz), dot(normal, nm_y)) * vec2(0.5)  + vec2(0.5);
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 textureNormalMap(const in vec3 normal, const in int flipY) {
+    vec3 rgb = normal * vec3(2.0) + vec3(-1.0); // MADD vec form
+    rgb[1] = flipY == 1 ? -rgb[1] : rgb[1];
+    return rgb;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 bumpMap(const in vec4 tangent, const in vec3 normal, const in vec2 gradient) {
+    vec3 outnormal;
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // vec3 tang =  normalize(tangent.xyz);
+        vec3 tang =  tangent.xyz / l;
+        vec3 binormal = tangent.w * normalize(cross(normal, tang));
+        outnormal = normal + gradient.x * tang + gradient.y * binormal;
+    }
+    else {
+       outnormal = vec3(normal.x + gradient.x, normal.y + gradient.y, normal.z);
+    }
+    return normalize(outnormal);
+}
+
+//#pragma DECLARE_FUNCTION
+float checkerboard(const in vec2 uv, const in vec4 halton) {
+    float taaSwap = step(halton.z, 0.0);
+    return mod(taaSwap + floor(uv.x) + floor(uv.y), 2.0);
+}
+
+// random links on packing :
+// cesium attributes packing
+// https://cesiumjs.org/2015/05/18/Vertex-Compression/
+
+// float packing in 24 bits or 32 bits
+// https://skytiger.wordpress.com/2010/12/01/packing-depth-into-color/
+
+//#pragma DECLARE_FUNCTION
+vec4 encodeDepthAlphaProfileScatter(const in float depth, const in float alpha, const in float profile, const in float scatter) {
+    vec4 pack = vec4(0.0);
+
+    // opacity in alpha
+    pack.a = alpha;
+
+    if(profile == 0.0) {
+        const vec3 code = vec3(1.0, 255.0, 65025.0);
+        pack.rgb = vec3(code * depth);
+        pack.gb = fract(pack.gb);
+        pack.rg -= pack.gb * (1.0 / 256.0);
+    } else {
+        // depth in rg
+        pack.g = fract(depth * 255.0);
+        pack.r = depth - pack.g / 255.0;
+
+        // scatter 6 bits
+        pack.b = floor(0.5 + scatter * 63.0) * 4.0 / 255.0;
+    }
+
+    // profile on 2 lower bits
+    pack.b -= mod(pack.b, 4.0 / 255.0);
+    pack.b += profile / 255.0; // 3 profile possible for sss
+
+    return pack;
+}
+
+int decodeProfile(const in vec4 pack) {
+    float packValue = floor(pack.b * 255.0 + 0.5);
+    // we extract the 2 lowest bits
+    float profile = mod(packValue, 2.0);
+    profile += mod(packValue - profile, 4.0);
+    return int(profile);
+}
+
+float decodeDepth(const in vec4 pack) {
+    if(decodeProfile(pack) == 0){
+        const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+        return dot(pack.rgb, decode);
+    }
+
+    return pack.r + pack.g / 255.0;
+}
+
+float decodeScatter(const in vec4 pack) {
+    float scatter = pack.b - mod(pack.b, 4.0 / 255.0);
+    return scatter * 255.0 / 4.0 / 63.0;
+}
+
+float decodeAlpha(const in vec4 pack) {
+    return pack.a;
+}
+
+float getLuminance(const in vec3 color) {
+    // http://stackoverflow.com/questions/596216/formula-to-determine-brightness-of-rgb-color
+    const vec3 colorBright = vec3(0.2126, 0.7152, 0.0722);
+    return dot(color, colorBright);
+}
+
+float distanceToDepth(const in sampler2D depth, const in vec2 uv, const in vec4 viewPos, const vec2 nearFar) {
+    float fragDepth = clamp( (-viewPos.z * viewPos.w - nearFar.x) / (nearFar.y - nearFar.x), 0.0, 1.0);
+    return fragDepth - decodeDepth(texture2D(depth, uv));
+}
+
+vec3 encode24(const in float x){
+    const vec3 code = vec3(1.0, 255.0, 65025.0);
+    vec3 pack = vec3(code * x);
+    pack.gb = fract(pack.gb);
+    pack.rg -= pack.gb * (1.0 / 256.0);
+    return pack;
+}
+
+float decode24(const in vec3 x) {
+    const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+    return dot(x, decode);
+}
+
+// white vs interleaved vs blue noise
+// https://blog.demofox.org/2017/10/31/animating-noise-for-integration-over-time/
+
+// to test in a shadertoy
+// https://www.shadertoy.com/view/lsdfD4
+
+// https://www.shadertoy.com/view/4djSRW
+// most combinations are possible : in[1,2,3] -> out[1,2,3]
+#define INT_SCALE1 .1031
+float pseudoRandom(const in vec2 fragCoord) {
+    vec3 p3  = fract(vec3(fragCoord.xyx) * INT_SCALE1);
+    p3 += dot(p3, p3.yzx + 19.19);
+    return fract((p3.x + p3.y) * p3.z);
+}
+
+// https://github.com/EpicGames/UnrealEngine/blob/release/Engine/Shaders/Private/Random.ush#L27
+float interleavedGradientNoise(const in vec2 fragCoord, const in float frameMod) {
+    vec3 magic = vec3(0.06711056, 0.00583715, 52.9829189);
+    return fract(magic.z * fract(dot(fragCoord.xy + frameMod * vec2(47.0, 17.0) * 0.695, magic.xy)));
+}
+
+// https://github.com/EpicGames/UnrealEngine/blob/release/Engine/Shaders/Private/MaterialTemplate.ush#L1863
+// we slighty change it by multiplying by 1.2 (to match with other noise), otherwise the range seems to be between [0 - 0.83]
+float ditheringNoise(const in vec2 fragCoord, const in float frameMod) {
+    // float fm = mod(frameMod, 2.0) == 0.0 ? 1.0 : -1.0;
+    float fm = frameMod;
+    float dither5 = fract((fragCoord.x + fragCoord.y * 2.0 - 1.5 + fm) / 5.0);
+    float noise = fract(dot(vec2(171.0, 231.0) / 71.0, fragCoord.xy));
+    return (dither5 * 5.0 + noise) * (1.2 / 6.0);
+}
+
+//#pragma DECLARE_FUNCTION
+void ditheringMaskingDiscard(
+    const in vec4 fragCoord,
+    const in int dithering,
+    const in float alpha,
+    const in float factor,
+
+    const in float thinLayer,
+
+    const in float frameMod,
+    const in vec2 nearFar,
+
+    const in vec4 halton) {
+
+    if (dithering != 1) {
+        if (alpha < factor) discard;
+        return;
+    }
+
+    float rnd;
+
+    if (thinLayer == 0.0) {
+        float linZ = (1.0 / fragCoord.w - nearFar.x) / (nearFar.y - nearFar.x);
+        float sliceZ = floor(linZ * 500.0) / 500.0;
+        rnd = interleavedGradientNoise(fragCoord.xy + sliceZ, frameMod);
+    } else {
+        rnd = pseudoRandom(fragCoord.xy + halton.xy * 1000.0 + fragCoord.z * (abs(halton.z) == 2.0 ? 1000.0 : 1.0));
+    }
+
+    if (alpha * factor < rnd) discard;
+}
+
+
+
+uniform float uQuality; // mipmap usage
+
+
+uniform float uSsaoRadius;
+uniform float uSsaoIntensity;
+uniform float uSsaoBias;
+uniform vec4 uSsaoProjectionInfo;
+uniform float uSsaoProjectionScale;
+
+uniform vec2 uNearFar;
+
+uniform float uFrameModTaaSS;
+
+// Constant used to scale the depth view value that is given to the blur pass
+#define MIN_RADIUS 1.0
+#define NB_SPIRAL_TURNS 3.0
+
+vec4 fetchDepthPackLevel(const in vec2 uv, const in float level){
+    float maxLod = 5.0;
+    float powLevel = pow(2.0, min(maxLod, floor(level)) + 1.0);
+    vec2 pixelSize = 2.0 * powLevel / uTextureMipmapDepthSize;
+
+    vec2 uvFetch = max(pixelSize, min(1.0 - pixelSize, uv));
+    uvFetch = vec2(2.0 * uvFetch.x, powLevel - 1.0 - uvFetch.y) * uTextureMipmapDepthRatio.xy / powLevel;
+
+    return texture2D(TextureMipmapDepth, uvFetch);
+}
+
+float fetchDepthLevel(const in vec2 uv, const in float level){
+    return decode24(fetchDepthPackLevel(uv, level).xyz);
+}
+
+float zValueFromScreenSpacePosition(const in float depth) {
+    return uNearFar.x + (uNearFar.y - uNearFar.x) * depth;
+}
+
+vec3 reconstructCSPosition(const in vec2 ssP, const in float z) {
+    return vec3((ssP.xy * uSsaoProjectionInfo.xy + uSsaoProjectionInfo.zw) * z, z);
+}
+
+vec3 getPosition(const in vec2 uv) {
+    return reconstructCSPosition(uv * uTextureOutputSize, zValueFromScreenSpacePosition(fetchDepthLevel(uv, 0.0)));
+}
+
+#define MAX_MIP_LEVEL 5
+// Determines at which point we should switch mip level
+// if number is too small (~3) will lead to flashing (bad variance as many taps give same pixel)
+// if number is too high, mip level are not used well and the cache is not used efficiently
+#define LOG_MAX_OFFSET 3
+
+vec3 getOffsetedPixelPos(
+    const in vec2 uv,
+    const in vec2 unitOffset,
+    const in float screenSpaceRadius) {
+
+    float mipLevel = clamp(floor(log2(screenSpaceRadius)) - float(LOG_MAX_OFFSET), 0.0, float(MAX_MIP_LEVEL));
+    vec2 uvOff = uv + floor(screenSpaceRadius * unitOffset) / uTextureOutputSize;
+
+    float d = zValueFromScreenSpacePosition(fetchDepthLevel(uvOff, mipLevel));
+    return reconstructCSPosition(uvOff * uTextureOutputSize, d);
+}
+
+#define PIOVER8 0.39269908169
+vec3 unpackNormal1(const in float pack1) {
+    float pack8 = floor(pack1 * 255.0);
+    float th = PIOVER8 * float(pack8 / 16.0);
+    float len = sqrt(mod(float(pack8), 16.0) / 15.001);
+    vec2 nv = vec2(cos(th), sin(th)) * len;
+    return -vec3(nv.x, nv.y, sqrt(max(0.0, 1.0 - nv.x * nv.x - nv.y * nv.y)));
+}
+
+vec3 unpackNormal2(const in vec2 pack2) {
+    vec3 nv = pack2.rgg * 2.0 - 1.0;
+    return -vec3(nv.x, nv.y, sqrt(max(0.0, 1.0 - nv.x * nv.x - nv.y * nv.y)));
+}
+
+#define SSAO_TAP_EXTRACT(id) screenSpaceRadius = (float(id) + 0.5) * (1.0 / nbSamples);     angle = screenSpaceRadius * (NB_SPIRAL_TURNS * 6.28) + randomAngle;     screenSpaceRadius = max(0.75, screenSpaceRadius * ssRadius);     offsetUnitVec = vec2(cos(angle), sin(angle));     occludingPoint = getOffsetedPixelPos(uv, offsetUnitVec, screenSpaceRadius);     occludingPoint -= cameraSpacePosition;     vv = dot(occludingPoint, occludingPoint);     vn = dot(occludingPoint, normal);     contrib += max(1.0 - vv * invRadius2, 0.0) * max((vn - uSsaoBias) * inversesqrt(vv), 0.0); 
+#define SSAO_DO_TAPS(void) SSAO_TAP_EXTRACT(offset + 0);     SSAO_TAP_EXTRACT(offset + 1);     SSAO_TAP_EXTRACT(offset + 2);     SSAO_TAP_EXTRACT(offset + 3);     SSAO_TAP_EXTRACT(offset + 4);     SSAO_TAP_EXTRACT(offset + 5);     SSAO_TAP_EXTRACT(offset + 6);     SSAO_TAP_EXTRACT(offset + 7);     SSAO_TAP_EXTRACT(offset + 8);     SSAO_TAP_EXTRACT(offset + 9);     SSAO_TAP_EXTRACT(offset + 10);     offset += 11; 
+
+vec4 ssaoExtract() {
+    vec2 uv = gTexCoord;
+
+    vec3 depthPacked = fetchDepthPackLevel(uv, 0.0).xyz;
+
+    vec3 cameraSpacePosition = getPosition(uv);
+    float ssRadius = -uSsaoProjectionScale * uSsaoRadius / cameraSpacePosition.z;
+
+#ifdef SSAO_NORMAL
+    vec3 normal = unpackNormal2(TEXTURE_2D_TextureDepth(uv).ba); // g buffer normal 2 component on ba
+#elif defined(GL_OES_standard_derivatives) && !defined(MOBILE)
+    vec3 normal = cross(dFdy(cameraSpacePosition), dFdx(cameraSpacePosition));
+#else
+    vec2 offDepth = vec2(1.0, 0.0);
+    vec3 depthLeft = getPosition(uv - offDepth.xy / uTextureMipmapDepthSize);
+    vec3 depthRight = getPosition(uv + offDepth.xy / uTextureMipmapDepthSize);
+    vec3 depthBottom = getPosition(uv - offDepth.yx / uTextureMipmapDepthSize);
+    vec3 depthTop = getPosition(uv + offDepth.yx / uTextureMipmapDepthSize);
+    vec3 normal = cross(depthLeft - depthRight, depthTop - depthBottom);
+#endif
+
+    // early returns should be done derivatives usage to avoid bad edges
+
+    // early return background
+    if (depthPacked.x == 1.0) {
+        return vec4(depthPacked, 1.0);
+    }
+
+    // early return radius too small (note: needs to be in separate conditional because of nvidia/osx bug)
+    if (ssRadius < MIN_RADIUS) {
+        return vec4(depthPacked, 1.0);
+    }
+
+    normal = normalize(normal);
+    float nFalloff = mix(1.0, max(0.0, 1.5 * normal.z), 0.35);
+
+     // needs to be > 2PI
+    float randomAngle = 6.28 * interleavedGradientNoise(gl_FragCoord.xy, uFrameModTaaSS);
+   
+    float invRadius2 = 1.0 / (uSsaoRadius * uSsaoRadius);
+    float contrib = 0.0;
+
+    float vv;
+    float vn;
+    float screenSpaceRadius;
+    float angle;
+    vec3 occludingPoint;
+    vec2 offsetUnitVec;
+    int offset = 0;
+
+    float nbSamples = 11.0;
+    if (uQuality > 0.33) nbSamples += 11.0;
+    if (uQuality > 0.66) nbSamples += 11.0;
+
+    SSAO_DO_TAPS();
+    if (uQuality > 0.33) { SSAO_DO_TAPS(); }
+    if (uQuality > 0.66) { SSAO_DO_TAPS(); }
+
+    float aoValue = max(0.0, 1.0 - sqrt(contrib * nFalloff / nbSamples));
+    aoValue = pow(aoValue, 10.0 * uSsaoIntensity);
+
+    vec4 aoDepth;
+    aoDepth.rgb = depthPacked;
+    aoDepth.a = mix(1.0, aoValue, clamp(ssRadius - MIN_RADIUS, 0.0, 1.0));
+
+    return aoDepth;
+}
+
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = ssaoExtract();
+
+
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureSsaoExtract
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureSsaoBlurH
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureBlurInput;
+uniform vec2 uTextureBlurInputSize;
+uniform vec2 uTextureBlurInputRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+#define SSAO_BLUR_H
+
+#define TEXTURE_2D_TextureBlurInput(uv) (texture2D(TextureBlurInput, (min(uv, 1.0 - 1e+0 / uTextureBlurInputSize.xy)) * uTextureBlurInputRatio))
+#define TEXTURE_2D_TextureInput(uv) (texture2D(TextureInput, (min(uv, 1.0 - 1e+0 / uTextureInputSize.xy)) * uTextureInputRatio))
+
+
+
+#define _linTest(color, keepLinear) { return keepLinear == 1 ? color : linearTosRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGBWithTest(const in float color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGBWithTest(const in vec3 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGBWithTest(const in vec4 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+float adjustSpecular( const in float specular, const in vec3 normal ) {
+    // Based on The Order : 1886 SIGGRAPH course notes implementation (page 21 notes)
+    float normalLen = length(normal);
+    if ( normalLen < 1.0) {
+        float normalLen2 = normalLen * normalLen;
+        float kappa = ( 3.0 * normalLen -  normalLen2 * normalLen )/( 1.0 - normalLen2 );
+        // http://www.frostbite.com/2014/11/moving-frostbite-to-pbr/
+        // page 91 : they use 0.5/kappa instead
+        return 1.0-min(1.0, sqrt( (1.0-specular) * (1.0-specular) + 1.0/kappa ));
+    }
+    return specular;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 normalTangentSpace(const in vec4 tangent, const in vec3 normal, const in vec3 texNormal) {
+    vec3 tang = vec3(0.0,1.0,0.0);
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // tang =  normalize(tangent.xyz);
+        tang =  tangent.xyz / l;
+    }
+    vec3 B = tangent.w * normalize(cross(normal, tang));
+    return normalize( texNormal.x * tang + texNormal.y * B + texNormal.z * normal);
+}
+
+//#pragma DECLARE_FUNCTION
+vec2 normalMatcap(const in vec3 normal, const in vec3 eyeVector) {
+    vec3 nm_x = vec3(-eyeVector.z, 0.0, eyeVector.x);
+    vec3 nm_y = cross(nm_x, eyeVector);
+    return vec2(dot(normal.xz, -nm_x.xz), dot(normal, nm_y)) * vec2(0.5)  + vec2(0.5);
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 textureNormalMap(const in vec3 normal, const in int flipY) {
+    vec3 rgb = normal * vec3(2.0) + vec3(-1.0); // MADD vec form
+    rgb[1] = flipY == 1 ? -rgb[1] : rgb[1];
+    return rgb;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 bumpMap(const in vec4 tangent, const in vec3 normal, const in vec2 gradient) {
+    vec3 outnormal;
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // vec3 tang =  normalize(tangent.xyz);
+        vec3 tang =  tangent.xyz / l;
+        vec3 binormal = tangent.w * normalize(cross(normal, tang));
+        outnormal = normal + gradient.x * tang + gradient.y * binormal;
+    }
+    else {
+       outnormal = vec3(normal.x + gradient.x, normal.y + gradient.y, normal.z);
+    }
+    return normalize(outnormal);
+}
+
+//#pragma DECLARE_FUNCTION
+float checkerboard(const in vec2 uv, const in vec4 halton) {
+    float taaSwap = step(halton.z, 0.0);
+    return mod(taaSwap + floor(uv.x) + floor(uv.y), 2.0);
+}
+
+// random links on packing :
+// cesium attributes packing
+// https://cesiumjs.org/2015/05/18/Vertex-Compression/
+
+// float packing in 24 bits or 32 bits
+// https://skytiger.wordpress.com/2010/12/01/packing-depth-into-color/
+
+//#pragma DECLARE_FUNCTION
+vec4 encodeDepthAlphaProfileScatter(const in float depth, const in float alpha, const in float profile, const in float scatter) {
+    vec4 pack = vec4(0.0);
+
+    // opacity in alpha
+    pack.a = alpha;
+
+    if(profile == 0.0) {
+        const vec3 code = vec3(1.0, 255.0, 65025.0);
+        pack.rgb = vec3(code * depth);
+        pack.gb = fract(pack.gb);
+        pack.rg -= pack.gb * (1.0 / 256.0);
+    } else {
+        // depth in rg
+        pack.g = fract(depth * 255.0);
+        pack.r = depth - pack.g / 255.0;
+
+        // scatter 6 bits
+        pack.b = floor(0.5 + scatter * 63.0) * 4.0 / 255.0;
+    }
+
+    // profile on 2 lower bits
+    pack.b -= mod(pack.b, 4.0 / 255.0);
+    pack.b += profile / 255.0; // 3 profile possible for sss
+
+    return pack;
+}
+
+int decodeProfile(const in vec4 pack) {
+    float packValue = floor(pack.b * 255.0 + 0.5);
+    // we extract the 2 lowest bits
+    float profile = mod(packValue, 2.0);
+    profile += mod(packValue - profile, 4.0);
+    return int(profile);
+}
+
+float decodeDepth(const in vec4 pack) {
+    if(decodeProfile(pack) == 0){
+        const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+        return dot(pack.rgb, decode);
+    }
+
+    return pack.r + pack.g / 255.0;
+}
+
+float decodeScatter(const in vec4 pack) {
+    float scatter = pack.b - mod(pack.b, 4.0 / 255.0);
+    return scatter * 255.0 / 4.0 / 63.0;
+}
+
+float decodeAlpha(const in vec4 pack) {
+    return pack.a;
+}
+
+float getLuminance(const in vec3 color) {
+    // http://stackoverflow.com/questions/596216/formula-to-determine-brightness-of-rgb-color
+    const vec3 colorBright = vec3(0.2126, 0.7152, 0.0722);
+    return dot(color, colorBright);
+}
+
+float distanceToDepth(const in sampler2D depth, const in vec2 uv, const in vec4 viewPos, const vec2 nearFar) {
+    float fragDepth = clamp( (-viewPos.z * viewPos.w - nearFar.x) / (nearFar.y - nearFar.x), 0.0, 1.0);
+    return fragDepth - decodeDepth(texture2D(depth, uv));
+}
+
+vec3 encode24(const in float x){
+    const vec3 code = vec3(1.0, 255.0, 65025.0);
+    vec3 pack = vec3(code * x);
+    pack.gb = fract(pack.gb);
+    pack.rg -= pack.gb * (1.0 / 256.0);
+    return pack;
+}
+
+float decode24(const in vec3 x) {
+    const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+    return dot(x, decode);
+}
+
+
+#define SSAO_FILTER_RADIUS 3
+
+#define SSAO_TAP_BLUR(id, absid) sampleTex = TEXTURE_2D_TextureBlurInput(uv + axis * float(id) * 2.0);     z = decode24(sampleTex.xyz);     weight = max(0.0, 1.0 - sharpnessFactor * abs(z - initialZ)) * (0.3 + gaussian[absid]);     sum += weight * sampleTex.a;     totalWeight += weight;
+
+vec4 ssaoBlur(const in vec2 axis) {
+    vec2 uv = gTexCoord;
+
+    vec4 aoDepth = TEXTURE_2D_TextureBlurInput(uv);
+
+    // background
+    if(aoDepth.x == 1.0){
+        return aoDepth;
+    }
+
+    float initialZ = decode24(aoDepth.xyz);
+
+    float gaussian[SSAO_FILTER_RADIUS + 2]; // dummy because of intel off-by-one bug
+    gaussian[0] = 0.153170;
+    gaussian[1] = 0.144893;
+    gaussian[2] = 0.122649;
+    gaussian[3] = 0.092902;
+    gaussian[4] = 0.0;
+
+    float totalWeight = gaussian[0];
+    float sum = aoDepth.a * totalWeight;
+    float sharpnessFactor = 400.0;
+
+    // ---- UNROLL ----
+    vec2 ofs;
+    float z;
+    float weight;
+    vec4 sampleTex;
+
+    SSAO_TAP_BLUR(-3, 3);
+    SSAO_TAP_BLUR(-2, 2);
+    SSAO_TAP_BLUR(-1, 1);
+    SSAO_TAP_BLUR(1, 1);
+    SSAO_TAP_BLUR(2, 2);
+    SSAO_TAP_BLUR(3, 3);
+    // ---- UNROLL ----
+
+    aoDepth.a = sum / totalWeight;
+    return aoDepth;
+}
+
+#ifdef SSAO_BLUR_H
+vec4 ssaoBlurH() {
+    return ssaoBlur(vec2(1.0, 0.0) / uTextureBlurInputSize);
+}
+#else
+vec4 ssaoBlurV() {
+    vec3 color = TEXTURE_2D_TextureInput(gTexCoord).rgb;
+    return vec4(color * ssaoBlur(vec2(0.0, 1.0) / uTextureBlurInputSize).aaa, 1.0);
+}
+#endif
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = ssaoBlurH();
+
+
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureSsaoBlurH
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME ssaoBlurV_combineOpacity
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureBlurInput;
+uniform sampler2D TextureTransparent;
+uniform vec2 uTextureInputSize;
+uniform vec2 uTextureInputRatio;
+uniform vec2 uTextureBlurInputSize;
+uniform vec2 uTextureBlurInputRatio;
+uniform vec2 uTextureTransparentSize;
+uniform vec2 uTextureTransparentRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+#define SSAO_BLUR_V
+
+#define TEXTURE_2D_TextureBlurInput(uv) (texture2D(TextureBlurInput, (min(uv, 1.0 - 1e+0 / uTextureBlurInputSize.xy)) * uTextureBlurInputRatio))
+#define TEXTURE_2D_TextureInput(uv) (vec4(decodeRGBM(texture2D(TextureInput, (min(uv, 1.0 - 1e+0 / uTextureInputSize.xy)) * uTextureInputRatio), uRGBMRange), 1.0))
+#define TEXTURE_2D_TextureTransparent(uv) (texture2D(TextureTransparent, (min(uv, 1.0 - 1e+0 / uTextureTransparentSize.xy)) * uTextureTransparentRatio))
+
+
+
+#define _linTest(color, keepLinear) { return keepLinear == 1 ? color : linearTosRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGBWithTest(const in float color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGBWithTest(const in vec3 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGBWithTest(const in vec4 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+float adjustSpecular( const in float specular, const in vec3 normal ) {
+    // Based on The Order : 1886 SIGGRAPH course notes implementation (page 21 notes)
+    float normalLen = length(normal);
+    if ( normalLen < 1.0) {
+        float normalLen2 = normalLen * normalLen;
+        float kappa = ( 3.0 * normalLen -  normalLen2 * normalLen )/( 1.0 - normalLen2 );
+        // http://www.frostbite.com/2014/11/moving-frostbite-to-pbr/
+        // page 91 : they use 0.5/kappa instead
+        return 1.0-min(1.0, sqrt( (1.0-specular) * (1.0-specular) + 1.0/kappa ));
+    }
+    return specular;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 normalTangentSpace(const in vec4 tangent, const in vec3 normal, const in vec3 texNormal) {
+    vec3 tang = vec3(0.0,1.0,0.0);
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // tang =  normalize(tangent.xyz);
+        tang =  tangent.xyz / l;
+    }
+    vec3 B = tangent.w * normalize(cross(normal, tang));
+    return normalize( texNormal.x * tang + texNormal.y * B + texNormal.z * normal);
+}
+
+//#pragma DECLARE_FUNCTION
+vec2 normalMatcap(const in vec3 normal, const in vec3 eyeVector) {
+    vec3 nm_x = vec3(-eyeVector.z, 0.0, eyeVector.x);
+    vec3 nm_y = cross(nm_x, eyeVector);
+    return vec2(dot(normal.xz, -nm_x.xz), dot(normal, nm_y)) * vec2(0.5)  + vec2(0.5);
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 textureNormalMap(const in vec3 normal, const in int flipY) {
+    vec3 rgb = normal * vec3(2.0) + vec3(-1.0); // MADD vec form
+    rgb[1] = flipY == 1 ? -rgb[1] : rgb[1];
+    return rgb;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 bumpMap(const in vec4 tangent, const in vec3 normal, const in vec2 gradient) {
+    vec3 outnormal;
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // vec3 tang =  normalize(tangent.xyz);
+        vec3 tang =  tangent.xyz / l;
+        vec3 binormal = tangent.w * normalize(cross(normal, tang));
+        outnormal = normal + gradient.x * tang + gradient.y * binormal;
+    }
+    else {
+       outnormal = vec3(normal.x + gradient.x, normal.y + gradient.y, normal.z);
+    }
+    return normalize(outnormal);
+}
+
+//#pragma DECLARE_FUNCTION
+float checkerboard(const in vec2 uv, const in vec4 halton) {
+    float taaSwap = step(halton.z, 0.0);
+    return mod(taaSwap + floor(uv.x) + floor(uv.y), 2.0);
+}
+
+// random links on packing :
+// cesium attributes packing
+// https://cesiumjs.org/2015/05/18/Vertex-Compression/
+
+// float packing in 24 bits or 32 bits
+// https://skytiger.wordpress.com/2010/12/01/packing-depth-into-color/
+
+//#pragma DECLARE_FUNCTION
+vec4 encodeDepthAlphaProfileScatter(const in float depth, const in float alpha, const in float profile, const in float scatter) {
+    vec4 pack = vec4(0.0);
+
+    // opacity in alpha
+    pack.a = alpha;
+
+    if(profile == 0.0) {
+        const vec3 code = vec3(1.0, 255.0, 65025.0);
+        pack.rgb = vec3(code * depth);
+        pack.gb = fract(pack.gb);
+        pack.rg -= pack.gb * (1.0 / 256.0);
+    } else {
+        // depth in rg
+        pack.g = fract(depth * 255.0);
+        pack.r = depth - pack.g / 255.0;
+
+        // scatter 6 bits
+        pack.b = floor(0.5 + scatter * 63.0) * 4.0 / 255.0;
+    }
+
+    // profile on 2 lower bits
+    pack.b -= mod(pack.b, 4.0 / 255.0);
+    pack.b += profile / 255.0; // 3 profile possible for sss
+
+    return pack;
+}
+
+int decodeProfile(const in vec4 pack) {
+    float packValue = floor(pack.b * 255.0 + 0.5);
+    // we extract the 2 lowest bits
+    float profile = mod(packValue, 2.0);
+    profile += mod(packValue - profile, 4.0);
+    return int(profile);
+}
+
+float decodeDepth(const in vec4 pack) {
+    if(decodeProfile(pack) == 0){
+        const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+        return dot(pack.rgb, decode);
+    }
+
+    return pack.r + pack.g / 255.0;
+}
+
+float decodeScatter(const in vec4 pack) {
+    float scatter = pack.b - mod(pack.b, 4.0 / 255.0);
+    return scatter * 255.0 / 4.0 / 63.0;
+}
+
+float decodeAlpha(const in vec4 pack) {
+    return pack.a;
+}
+
+float getLuminance(const in vec3 color) {
+    // http://stackoverflow.com/questions/596216/formula-to-determine-brightness-of-rgb-color
+    const vec3 colorBright = vec3(0.2126, 0.7152, 0.0722);
+    return dot(color, colorBright);
+}
+
+float distanceToDepth(const in sampler2D depth, const in vec2 uv, const in vec4 viewPos, const vec2 nearFar) {
+    float fragDepth = clamp( (-viewPos.z * viewPos.w - nearFar.x) / (nearFar.y - nearFar.x), 0.0, 1.0);
+    return fragDepth - decodeDepth(texture2D(depth, uv));
+}
+
+vec3 encode24(const in float x){
+    const vec3 code = vec3(1.0, 255.0, 65025.0);
+    vec3 pack = vec3(code * x);
+    pack.gb = fract(pack.gb);
+    pack.rg -= pack.gb * (1.0 / 256.0);
+    return pack;
+}
+
+float decode24(const in vec3 x) {
+    const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+    return dot(x, decode);
+}
+
+
+#define SSAO_FILTER_RADIUS 3
+
+#define SSAO_TAP_BLUR(id, absid) sampleTex = TEXTURE_2D_TextureBlurInput(uv + axis * float(id) * 2.0);     z = decode24(sampleTex.xyz);     weight = max(0.0, 1.0 - sharpnessFactor * abs(z - initialZ)) * (0.3 + gaussian[absid]);     sum += weight * sampleTex.a;     totalWeight += weight;
+
+vec4 ssaoBlur(const in vec2 axis) {
+    vec2 uv = gTexCoord;
+
+    vec4 aoDepth = TEXTURE_2D_TextureBlurInput(uv);
+
+    // background
+    if(aoDepth.x == 1.0){
+        return aoDepth;
+    }
+
+    float initialZ = decode24(aoDepth.xyz);
+
+    float gaussian[SSAO_FILTER_RADIUS + 2]; // dummy because of intel off-by-one bug
+    gaussian[0] = 0.153170;
+    gaussian[1] = 0.144893;
+    gaussian[2] = 0.122649;
+    gaussian[3] = 0.092902;
+    gaussian[4] = 0.0;
+
+    float totalWeight = gaussian[0];
+    float sum = aoDepth.a * totalWeight;
+    float sharpnessFactor = 400.0;
+
+    // ---- UNROLL ----
+    vec2 ofs;
+    float z;
+    float weight;
+    vec4 sampleTex;
+
+    SSAO_TAP_BLUR(-3, 3);
+    SSAO_TAP_BLUR(-2, 2);
+    SSAO_TAP_BLUR(-1, 1);
+    SSAO_TAP_BLUR(1, 1);
+    SSAO_TAP_BLUR(2, 2);
+    SSAO_TAP_BLUR(3, 3);
+    // ---- UNROLL ----
+
+    aoDepth.a = sum / totalWeight;
+    return aoDepth;
+}
+
+#ifdef SSAO_BLUR_H
+vec4 ssaoBlurH() {
+    return ssaoBlur(vec2(1.0, 0.0) / uTextureBlurInputSize);
+}
+#else
+vec4 ssaoBlurV() {
+    vec3 color = TEXTURE_2D_TextureInput(gTexCoord).rgb;
+    return vec4(color * ssaoBlur(vec2(0.0, 1.0) / uTextureBlurInputSize).aaa, 1.0);
+}
+#endif
+
+vec4 combineOpacity(const in vec4 color) {
+    // should be replaced with TEXTURE_2D_TextureTransparent as is can make sense
+    vec4 transparent = TEXTURE_2D_TextureTransparent(gTexCoord);
+    return vec4(color.rgb * (1.0 - transparent.a) + transparent.rgb, 1.0);
+}
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = ssaoBlurV();
+    color = combineOpacity(color);
+
+    color = encodeRGBM(color.rgb, uRGBMRange);
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME ssaoBlurV_combineOpacity
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureBlurTemp0
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureBlurInput;
+uniform vec2 uTextureBlurInputSize;
+uniform vec2 uTextureBlurInputRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureBlurInput(uv) (vec4(decodeRGBM(texture2D(TextureBlurInput, (min(uv, 1.0 - 1e+0 / uTextureBlurInputSize.xy)) * uTextureBlurInputRatio), uRGBMRange), 1.0))
+
+uniform vec2 uPixelRatio;
+uniform vec2 uBlurDir;
+uniform vec2 uGlobalTexSize;
+
+vec4 gaussianBlur() {
+    vec3 pixel = 0.375 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy).rgb;
+    vec2 offset;
+    vec2 blurDir = uPixelRatio.xy * uBlurDir.xy / uTextureOutputSize.xy;
+    blurDir *= uGlobalTexSize.y * 0.00075;
+    offset = blurDir * 1.2;
+    pixel += 0.3125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.3125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    return vec4(pixel, 1.0);
+}
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = gaussianBlur();
+
+    color = encodeRGBM(color.rgb, uRGBMRange);
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureBlurTemp0
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureBlurTemp1
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureBlurInput;
+uniform vec2 uTextureBlurInputSize;
+uniform vec2 uTextureBlurInputRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureBlurInput(uv) (vec4(decodeRGBM(texture2D(TextureBlurInput, (min(uv, 1.0 - 1e+0 / uTextureBlurInputSize.xy)) * uTextureBlurInputRatio), uRGBMRange), 1.0))
+
+uniform vec2 uPixelRatio;
+uniform vec2 uBlurDir;
+uniform vec2 uGlobalTexSize;
+
+vec4 gaussianBlur() {
+    vec3 pixel = 0.3125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy).rgb;
+    vec2 offset;
+    vec2 blurDir = uPixelRatio.xy * uBlurDir.xy / uTextureOutputSize.xy;
+    blurDir *= uGlobalTexSize.y * 0.00075;
+    offset = blurDir * 1.2857142857142858;
+    pixel += 0.328125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.328125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    return vec4(pixel, 1.0);
+}
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = gaussianBlur();
+
+    color = encodeRGBM(color.rgb, uRGBMRange);
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureBlurTemp1
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureBlurTemp2
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureBlurInput;
+uniform vec2 uTextureBlurInputSize;
+uniform vec2 uTextureBlurInputRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureBlurInput(uv) (vec4(decodeRGBM(texture2D(TextureBlurInput, (min(uv, 1.0 - 1e+0 / uTextureBlurInputSize.xy)) * uTextureBlurInputRatio), uRGBMRange), 1.0))
+
+uniform vec2 uPixelRatio;
+uniform vec2 uBlurDir;
+uniform vec2 uGlobalTexSize;
+
+vec4 gaussianBlur() {
+    vec3 pixel = 0.2734375 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy).rgb;
+    vec2 offset;
+    vec2 blurDir = uPixelRatio.xy * uBlurDir.xy / uTextureOutputSize.xy;
+    blurDir *= uGlobalTexSize.y * 0.00075;
+    offset = blurDir * 1.3333333333333333;
+    pixel += 0.328125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.328125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    offset = blurDir * 3.111111111111111;
+    pixel += 0.03515625 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.03515625 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    return vec4(pixel, 1.0);
+}
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = gaussianBlur();
+
+    color = encodeRGBM(color.rgb, uRGBMRange);
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureBlurTemp2
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureBlurTemp3
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureBlurInput;
+uniform vec2 uTextureBlurInputSize;
+uniform vec2 uTextureBlurInputRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureBlurInput(uv) (vec4(decodeRGBM(texture2D(TextureBlurInput, (min(uv, 1.0 - 1e+0 / uTextureBlurInputSize.xy)) * uTextureBlurInputRatio), uRGBMRange), 1.0))
+
+uniform vec2 uPixelRatio;
+uniform vec2 uBlurDir;
+uniform vec2 uGlobalTexSize;
+
+vec4 gaussianBlur() {
+    vec3 pixel = 0.24609375 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy).rgb;
+    vec2 offset;
+    vec2 blurDir = uPixelRatio.xy * uBlurDir.xy / uTextureOutputSize.xy;
+    blurDir *= uGlobalTexSize.y * 0.00075;
+    offset = blurDir * 1.3636363636363635;
+    pixel += 0.322265625 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.322265625 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    offset = blurDir * 3.1818181818181817;
+    pixel += 0.0537109375 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.0537109375 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    return vec4(pixel, 1.0);
+}
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = gaussianBlur();
+
+    color = encodeRGBM(color.rgb, uRGBMRange);
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureBlurTemp3
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureBlurTemp4
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureBlurInput;
+uniform vec2 uTextureBlurInputSize;
+uniform vec2 uTextureBlurInputRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureBlurInput(uv) (vec4(decodeRGBM(texture2D(TextureBlurInput, (min(uv, 1.0 - 1e+0 / uTextureBlurInputSize.xy)) * uTextureBlurInputRatio), uRGBMRange), 1.0))
+
+uniform vec2 uPixelRatio;
+uniform vec2 uBlurDir;
+uniform vec2 uGlobalTexSize;
+
+vec4 gaussianBlur() {
+    vec3 pixel = 0.2255859375 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy).rgb;
+    vec2 offset;
+    vec2 blurDir = uPixelRatio.xy * uBlurDir.xy / uTextureOutputSize.xy;
+    blurDir *= uGlobalTexSize.y * 0.00075;
+    offset = blurDir * 1.3846153846153846;
+    pixel += 0.314208984375 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.314208984375 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    offset = blurDir * 3.230769230769231;
+    pixel += 0.06982421875 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.06982421875 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    offset = blurDir * 5.076923076923077;
+    pixel += 0.003173828125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.003173828125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    return vec4(pixel, 1.0);
+}
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = gaussianBlur();
+
+    color = encodeRGBM(color.rgb, uRGBMRange);
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureBlurTemp4
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureBlurTemp5
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureBlurInput;
+uniform vec2 uTextureBlurInputSize;
+uniform vec2 uTextureBlurInputRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureBlurInput(uv) (vec4(decodeRGBM(texture2D(TextureBlurInput, (min(uv, 1.0 - 1e+0 / uTextureBlurInputSize.xy)) * uTextureBlurInputRatio), uRGBMRange), 1.0))
+
+uniform vec2 uPixelRatio;
+uniform vec2 uBlurDir;
+uniform vec2 uGlobalTexSize;
+
+vec4 gaussianBlur() {
+    vec3 pixel = 0.20947265625 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy).rgb;
+    vec2 offset;
+    vec2 blurDir = uPixelRatio.xy * uBlurDir.xy / uTextureOutputSize.xy;
+    blurDir *= uGlobalTexSize.y * 0.00075;
+    offset = blurDir * 1.4;
+    pixel += 0.30548095703125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.30548095703125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    offset = blurDir * 3.2666666666666666;
+    pixel += 0.08331298828125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.08331298828125 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    offset = blurDir * 5.133333333333334;
+    pixel += 0.00640869140625 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.00640869140625 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    return vec4(pixel, 1.0);
+}
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = gaussianBlur();
+
+    color = encodeRGBM(color.rgb, uRGBMRange);
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureBlurTemp5
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureBlurTemp6
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureBlurInput;
+uniform vec2 uTextureBlurInputSize;
+uniform vec2 uTextureBlurInputRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureBlurInput(uv) (vec4(decodeRGBM(texture2D(TextureBlurInput, (min(uv, 1.0 - 1e+0 / uTextureBlurInputSize.xy)) * uTextureBlurInputRatio), uRGBMRange), 1.0))
+
+uniform vec2 uPixelRatio;
+uniform vec2 uBlurDir;
+uniform vec2 uGlobalTexSize;
+
+vec4 gaussianBlur() {
+    vec3 pixel = 0.196380615234375 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy).rgb;
+    vec2 offset;
+    vec2 blurDir = uPixelRatio.xy * uBlurDir.xy / uTextureOutputSize.xy;
+    blurDir *= uGlobalTexSize.y * 0.00075;
+    offset = blurDir * 1.411764705882353;
+    pixel += 0.2967529296875 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.2967529296875 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    offset = blurDir * 3.2941176470588234;
+    pixel += 0.09442138671875 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.09442138671875 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    offset = blurDir * 5.176470588235294;
+    pixel += 0.0103759765625 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy + offset.xy).rgb;
+    pixel += 0.0103759765625 * TEXTURE_2D_TextureBlurInput(gTexCoord.xy - offset.xy).rgb;
+    return vec4(pixel, 1.0);
+}
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = gaussianBlur();
+
+    color = encodeRGBM(color.rgb, uRGBMRange);
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureBlurTemp6
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME TextureToBeRefracted
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TextureRefractionBlur0;
+uniform sampler2D TextureRefractionBlur1;
+uniform sampler2D TextureRefractionBlur2;
+uniform sampler2D TextureRefractionBlur3;
+uniform sampler2D TextureRefractionBlur4;
+uniform sampler2D TextureRefractionBlur5;
+uniform sampler2D TextureRefractionBlur6;
+uniform sampler2D TextureRefractionBlur7;
+uniform vec2 uTextureRefractionBlur0Size;
+uniform vec2 uTextureRefractionBlur0Ratio;
+uniform vec2 uTextureRefractionBlur1Size;
+uniform vec2 uTextureRefractionBlur1Ratio;
+uniform vec2 uTextureRefractionBlur2Size;
+uniform vec2 uTextureRefractionBlur2Ratio;
+uniform vec2 uTextureRefractionBlur3Size;
+uniform vec2 uTextureRefractionBlur3Ratio;
+uniform vec2 uTextureRefractionBlur4Size;
+uniform vec2 uTextureRefractionBlur4Ratio;
+uniform vec2 uTextureRefractionBlur5Size;
+uniform vec2 uTextureRefractionBlur5Ratio;
+uniform vec2 uTextureRefractionBlur6Size;
+uniform vec2 uTextureRefractionBlur6Ratio;
+uniform vec2 uTextureRefractionBlur7Size;
+uniform vec2 uTextureRefractionBlur7Ratio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureRefractionBlur0(uv) (vec4(decodeRGBM(texture2D(TextureRefractionBlur0, (min(uv, 1.0 - 1e+0 / uTextureRefractionBlur0Size.xy)) * uTextureRefractionBlur0Ratio), uRGBMRange), 1.0))
+#define TEXTURE_2D_TextureRefractionBlur1(uv) (vec4(decodeRGBM(texture2D(TextureRefractionBlur1, (min(uv, 1.0 - 1e+0 / uTextureRefractionBlur1Size.xy)) * uTextureRefractionBlur1Ratio), uRGBMRange), 1.0))
+#define TEXTURE_2D_TextureRefractionBlur2(uv) (vec4(decodeRGBM(texture2D(TextureRefractionBlur2, (min(uv, 1.0 - 1e+0 / uTextureRefractionBlur2Size.xy)) * uTextureRefractionBlur2Ratio), uRGBMRange), 1.0))
+#define TEXTURE_2D_TextureRefractionBlur3(uv) (vec4(decodeRGBM(texture2D(TextureRefractionBlur3, (min(uv, 1.0 - 1e+0 / uTextureRefractionBlur3Size.xy)) * uTextureRefractionBlur3Ratio), uRGBMRange), 1.0))
+#define TEXTURE_2D_TextureRefractionBlur4(uv) (vec4(decodeRGBM(texture2D(TextureRefractionBlur4, (min(uv, 1.0 - 1e+0 / uTextureRefractionBlur4Size.xy)) * uTextureRefractionBlur4Ratio), uRGBMRange), 1.0))
+#define TEXTURE_2D_TextureRefractionBlur5(uv) (vec4(decodeRGBM(texture2D(TextureRefractionBlur5, (min(uv, 1.0 - 1e+0 / uTextureRefractionBlur5Size.xy)) * uTextureRefractionBlur5Ratio), uRGBMRange), 1.0))
+#define TEXTURE_2D_TextureRefractionBlur6(uv) (vec4(decodeRGBM(texture2D(TextureRefractionBlur6, (min(uv, 1.0 - 1e+0 / uTextureRefractionBlur6Size.xy)) * uTextureRefractionBlur6Ratio), uRGBMRange), 1.0))
+#define TEXTURE_2D_TextureRefractionBlur7(uv) (vec4(decodeRGBM(texture2D(TextureRefractionBlur7, (min(uv, 1.0 - 1e+0 / uTextureRefractionBlur7Size.xy)) * uTextureRefractionBlur7Ratio), uRGBMRange), 1.0))
+
+
+vec4 packMipmapRefraction() {
+    vec4 result = vec4(0.0, 0.0, 0.0, 1.0);
+
+    // see _hookComposerResize in NodePostProcess.js (mipmap)
+    gTexCoord.y /= uTextureOutputRatio.y;
+
+    float levelLog = -log2(1.0 - gTexCoord.y) + 1.0;
+    float level = floor(levelLog) - 1.0;
+
+    float pLevel = pow(2.0, level + 1.0); // 2, 4, 8, 16...
+    gTexCoord.x = pLevel * gTexCoord.x * 0.5;
+    gTexCoord.y = pLevel * (1.0 - gTexCoord.y) - 1.0;
+
+    // unused part of the texture
+    if (gTexCoord.x > 1.0 || gTexCoord.y > 1.0) return result;
+
+    if (level < 0.1) result.rgb = TEXTURE_2D_TextureRefractionBlur0(gTexCoord).rgb;
+    else if (level < 1.1) result.rgb = TEXTURE_2D_TextureRefractionBlur1(gTexCoord).rgb;
+    else if (level < 2.1) result.rgb = TEXTURE_2D_TextureRefractionBlur2(gTexCoord).rgb;
+    else if (level < 3.1) result.rgb = TEXTURE_2D_TextureRefractionBlur3(gTexCoord).rgb;
+    else if (level < 4.1) result.rgb = TEXTURE_2D_TextureRefractionBlur4(gTexCoord).rgb;
+    else if (level < 5.1) result.rgb = TEXTURE_2D_TextureRefractionBlur5(gTexCoord).rgb;
+    else if (level < 6.1) result.rgb = TEXTURE_2D_TextureRefractionBlur6(gTexCoord).rgb;
+    else if (level < 7.1) result.rgb = TEXTURE_2D_TextureRefractionBlur7(gTexCoord).rgb;
+
+    return result;
+}
+
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = packMipmapRefraction();
+
+    color = encodeRGBM(color.rgb, uRGBMRange);
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME TextureToBeRefracted
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME passThrough
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform vec2 uTextureInputSize;
+uniform vec2 uTextureInputRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+
+
+#define TEXTURE_2D_TextureInput(uv) (vec4(decodeRGBM(texture2D(TextureInput, (min(uv, 1.0 - 1e+0 / uTextureInputSize.xy)) * uTextureInputRatio), uRGBMRange), 1.0))
+
+#ifdef VR_DISTORTION
+uniform vec2 uDistortion;
+uniform vec4 uProjectionLeft;
+uniform vec4 uUnprojectionLeft;
+
+// https://github.com/borismus/webvr-boilerplate/blob/master/src/distortion/barrel-distortion-fragment-v2.js
+
+vec2 barrel(const in vec2 v, const in vec4 projection, const in vec4 unprojection) {
+  vec2 w = (v + unprojection.zw) / unprojection.xy;
+  float val = dot(w, w);
+  // float poly = (showCenter == 1 && val < 0.00010) ? 10000.0 : 1.0 + (uDistortion.x + uDistortion.y * val) * val;
+  float poly = 1.0 + (uDistortion.x + uDistortion.y * val) * val;
+  return projection.xy * (poly * w) - projection.zw;
+}
+
+vec2 distortion(const in vec2 texCoord) {
+
+  if (abs(texCoord.x - 0.5) < .001) {
+    discard;
+  }
+
+  vec2 a;
+
+  if (texCoord.x < 0.5){
+    a = barrel(vec2(texCoord.x / 0.5, texCoord.y), uProjectionLeft, uUnprojectionLeft);
+  } else {
+    // right projections are shifted and vertically mirrored relative to left
+    const vec3 swi = vec3(1.0, -1.0, 0.0);
+    vec4 projectionRight = (uProjectionLeft + swi.zzxz) * swi.xxyx;
+    vec4 unprojectionRight = (uUnprojectionLeft + swi.zzxz) * swi.xxyx;
+    a = barrel(vec2((texCoord.x - 0.5) / 0.5, texCoord.y), projectionRight, unprojectionRight);
+  }
+
+  if (a.x < 0.0 || a.x > 1.0 || a.y < 0.0 || a.y > 1.0) {
+    discard;
+  }
+
+  return vec2(a.x * 0.5 + (texCoord.x < 0.5 ? 0.0 : 0.5), a.y);
+}
+#endif
+
+
+vec4 passThrough() {
+#ifdef VR_DISTORTION
+    gTexCoord = distortion(gTexCoord);
+#endif
+
+    return TEXTURE_2D_TextureInput(gTexCoord);
+}
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = passThrough();
+
+    color.rgb = linearTosRGB(color.rgb);
+
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME passThrough
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+ #else
+ precision mediump float;
+#endif
+attribute vec3 Vertex;
+void main(void) {
+  gl_Position = vec4(Vertex * 2.0 - 1.0, 1.0);
+}
+
+#define SHADER_NAME supersampleTaa
+
+__FRAGMENTSHADER__
+#version 100
+#ifdef GL_FRAGMENT_PRECISION_HIGH
+ precision highp float;
+#else
+ precision mediump float;
+#endif
+uniform float uRGBMRange;
+vec2 gTexCoord;
+uniform sampler2D TextureInput;
+uniform sampler2D TexturePrevious;
+uniform sampler2D TextureDepth;
+uniform vec2 uTextureInputSize;
+uniform vec2 uTextureInputRatio;
+uniform vec2 uTexturePreviousSize;
+uniform vec2 uTexturePreviousRatio;
+uniform vec2 uTextureDepthSize;
+uniform vec2 uTextureDepthRatio;
+uniform vec2 uTextureOutputSize;
+uniform vec2 uTextureOutputRatio;
+
+
+// approximation such as http://chilliant.blogspot.fr/2012/08/srgb-approximations-for-hlsl.html
+// introduced slightly darker colors and more slight banding in the darks.
+
+// so we stick with the reference implementation (except we don't check if color >= 0.0):
+// https://www.khronos.org/registry/gles/extensions/EXT/EXT_sRGB.txt
+#define LIN_SRGB(x) x < 0.0031308 ? x * 12.92 : 1.055 * pow(x, 1.0/2.4) - 0.055
+#define SRGB_LIN(x) x < 0.04045 ? x * (1.0 / 12.92) : pow((x + 0.055) * (1.0 / 1.055), 2.4)
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGB(const in float color) { return LIN_SRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGB(const in vec3 color) { return vec3(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b)); }
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGB(const in vec4 color) { return vec4(LIN_SRGB(color.r), LIN_SRGB(color.g), LIN_SRGB(color.b), color.a); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+float sRGBToLinear(const in float color) { return SRGB_LIN(color); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec3 sRGBToLinear(const in vec3 color) { return vec3(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b)); }
+
+//#pragma DECLARE_FUNCTION NODE_NAME:sRGBToLinear
+vec4 sRGBToLinear(const in vec4 color) { return vec4(SRGB_LIN(color.r), SRGB_LIN(color.g), SRGB_LIN(color.b), color.a); }
+
+//http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+vec3 RGBMToRGB( const in vec4 rgba ) {
+    const float maxRange = 8.0;
+    return rgba.rgb * maxRange * rgba.a;
+}
+
+const mat3 LUVInverse = mat3( 6.0013, -2.700, -1.7995, -1.332, 3.1029, -5.7720, 0.3007, -1.088, 5.6268 );
+
+vec3 LUVToRGB( const in vec4 vLogLuv ) {
+    float Le = vLogLuv.z * 255.0 + vLogLuv.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / vLogLuv.y;
+    Xp_Y_XYZp.x = vLogLuv.x * Xp_Y_XYZp.z;
+    vec3 vRGB = LUVInverse * Xp_Y_XYZp;
+    return max(vRGB, 0.0);
+}
+
+// http://graphicrants.blogspot.fr/2009/04/rgbm-color-encoding.html
+//#pragma DECLARE_FUNCTION
+vec4 encodeRGBM(const in vec3 color, const in float range) {
+    if(range <= 0.0) return vec4(color, 1.0);
+    vec4 rgbm;
+    vec3 col = color / range;
+    rgbm.a = clamp( max( max( col.r, col.g ), max( col.b, 1e-6 ) ), 0.0, 1.0 );
+    rgbm.a = ceil( rgbm.a * 255.0 ) / 255.0;
+    rgbm.rgb = col / rgbm.a;
+    return rgbm;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 decodeRGBM(const in vec4 color, const in float range) {
+    if(range <= 0.0) return color.rgb;
+    return range * color.rgb * color.a;
+}
+
+// https://twitter.com/pyalot/status/711956736639418369
+// https://github.com/mrdoob/three.js/issues/10331
+//#pragma DECLARE_FUNCTION NODE_NAME:FrontNormal
+#define _frontNormal(normal) gl_FrontFacing ? normal : -normal
+
+//#pragma DECLARE_FUNCTION NODE_NAME:Normalize
+#define _normalize(vec) normalize(vec)
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec3 color, const in float alpha) { return vec4(color.rgb * alpha, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 preMultAlpha(const in vec4 color) { return vec4(color.rgb * color.a, color.a); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in float alpha) { return vec4(color, alpha); }
+
+//#pragma DECLARE_FUNCTION
+vec4 setAlpha(const in vec3 color, const in vec4 alpha) { return vec4(color, alpha.a); }
+
+
+#define TAA_TRANSPARENT
+#define FEEDBACK_MIN 0.88
+#define FEEDBACK_MAX 0.97
+
+#define TEXTURE_2D_TextureInput(uv) (texture2D(TextureInput, (min(uv, 1.0 - 1e+0 / uTextureInputSize.xy)) * uTextureInputRatio))
+#define TEXTURE_2D_NEAREST_TexturePrevious(uv) (texture2D(TexturePrevious, (floor((min(uv, 1.0 - 1e+0 / uTexturePreviousSize.xy)) * uTexturePreviousSize) + 0.5) * uTexturePreviousRatio / uTexturePreviousSize, -99999.0))
+#define TEXTURE_2D_TextureDepth(uv) (texture2D(TextureDepth, (min(uv, 1.0 - 1e+0 / uTextureDepthSize.xy)) * uTextureDepthRatio))
+#define TEXTURE_2D_TexturePrevious(uv) (texture2D(TexturePrevious, (min(uv, 1.0 - 1e+0 / uTexturePreviousSize.xy)) * uTexturePreviousRatio))
+
+
+
+#define _linTest(color, keepLinear) { return keepLinear == 1 ? color : linearTosRGB(color); }
+
+//#pragma DECLARE_FUNCTION
+float linearTosRGBWithTest(const in float color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec3 linearTosRGBWithTest(const in vec3 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+vec4 linearTosRGBWithTest(const in vec4 color, const in int keepLinear) _linTest(color, keepLinear)
+
+//#pragma DECLARE_FUNCTION
+float adjustSpecular( const in float specular, const in vec3 normal ) {
+    // Based on The Order : 1886 SIGGRAPH course notes implementation (page 21 notes)
+    float normalLen = length(normal);
+    if ( normalLen < 1.0) {
+        float normalLen2 = normalLen * normalLen;
+        float kappa = ( 3.0 * normalLen -  normalLen2 * normalLen )/( 1.0 - normalLen2 );
+        // http://www.frostbite.com/2014/11/moving-frostbite-to-pbr/
+        // page 91 : they use 0.5/kappa instead
+        return 1.0-min(1.0, sqrt( (1.0-specular) * (1.0-specular) + 1.0/kappa ));
+    }
+    return specular;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 normalTangentSpace(const in vec4 tangent, const in vec3 normal, const in vec3 texNormal) {
+    vec3 tang = vec3(0.0,1.0,0.0);
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // tang =  normalize(tangent.xyz);
+        tang =  tangent.xyz / l;
+    }
+    vec3 B = tangent.w * normalize(cross(normal, tang));
+    return normalize( texNormal.x * tang + texNormal.y * B + texNormal.z * normal);
+}
+
+//#pragma DECLARE_FUNCTION
+vec2 normalMatcap(const in vec3 normal, const in vec3 eyeVector) {
+    vec3 nm_x = vec3(-eyeVector.z, 0.0, eyeVector.x);
+    vec3 nm_y = cross(nm_x, eyeVector);
+    return vec2(dot(normal.xz, -nm_x.xz), dot(normal, nm_y)) * vec2(0.5)  + vec2(0.5);
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 textureNormalMap(const in vec3 normal, const in int flipY) {
+    vec3 rgb = normal * vec3(2.0) + vec3(-1.0); // MADD vec form
+    rgb[1] = flipY == 1 ? -rgb[1] : rgb[1];
+    return rgb;
+}
+
+//#pragma DECLARE_FUNCTION
+vec3 bumpMap(const in vec4 tangent, const in vec3 normal, const in vec2 gradient) {
+    vec3 outnormal;
+    float l = length(tangent.xyz);
+    if (l != 0.0) {
+        //normalize reusing length computations
+        // vec3 tang =  normalize(tangent.xyz);
+        vec3 tang =  tangent.xyz / l;
+        vec3 binormal = tangent.w * normalize(cross(normal, tang));
+        outnormal = normal + gradient.x * tang + gradient.y * binormal;
+    }
+    else {
+       outnormal = vec3(normal.x + gradient.x, normal.y + gradient.y, normal.z);
+    }
+    return normalize(outnormal);
+}
+
+//#pragma DECLARE_FUNCTION
+float checkerboard(const in vec2 uv, const in vec4 halton) {
+    float taaSwap = step(halton.z, 0.0);
+    return mod(taaSwap + floor(uv.x) + floor(uv.y), 2.0);
+}
+
+// random links on packing :
+// cesium attributes packing
+// https://cesiumjs.org/2015/05/18/Vertex-Compression/
+
+// float packing in 24 bits or 32 bits
+// https://skytiger.wordpress.com/2010/12/01/packing-depth-into-color/
+
+//#pragma DECLARE_FUNCTION
+vec4 encodeDepthAlphaProfileScatter(const in float depth, const in float alpha, const in float profile, const in float scatter) {
+    vec4 pack = vec4(0.0);
+
+    // opacity in alpha
+    pack.a = alpha;
+
+    if(profile == 0.0) {
+        const vec3 code = vec3(1.0, 255.0, 65025.0);
+        pack.rgb = vec3(code * depth);
+        pack.gb = fract(pack.gb);
+        pack.rg -= pack.gb * (1.0 / 256.0);
+    } else {
+        // depth in rg
+        pack.g = fract(depth * 255.0);
+        pack.r = depth - pack.g / 255.0;
+
+        // scatter 6 bits
+        pack.b = floor(0.5 + scatter * 63.0) * 4.0 / 255.0;
+    }
+
+    // profile on 2 lower bits
+    pack.b -= mod(pack.b, 4.0 / 255.0);
+    pack.b += profile / 255.0; // 3 profile possible for sss
+
+    return pack;
+}
+
+int decodeProfile(const in vec4 pack) {
+    float packValue = floor(pack.b * 255.0 + 0.5);
+    // we extract the 2 lowest bits
+    float profile = mod(packValue, 2.0);
+    profile += mod(packValue - profile, 4.0);
+    return int(profile);
+}
+
+float decodeDepth(const in vec4 pack) {
+    if(decodeProfile(pack) == 0){
+        const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+        return dot(pack.rgb, decode);
+    }
+
+    return pack.r + pack.g / 255.0;
+}
+
+float decodeScatter(const in vec4 pack) {
+    float scatter = pack.b - mod(pack.b, 4.0 / 255.0);
+    return scatter * 255.0 / 4.0 / 63.0;
+}
+
+float decodeAlpha(const in vec4 pack) {
+    return pack.a;
+}
+
+float getLuminance(const in vec3 color) {
+    // http://stackoverflow.com/questions/596216/formula-to-determine-brightness-of-rgb-color
+    const vec3 colorBright = vec3(0.2126, 0.7152, 0.0722);
+    return dot(color, colorBright);
+}
+
+float distanceToDepth(const in sampler2D depth, const in vec2 uv, const in vec4 viewPos, const vec2 nearFar) {
+    float fragDepth = clamp( (-viewPos.z * viewPos.w - nearFar.x) / (nearFar.y - nearFar.x), 0.0, 1.0);
+    return fragDepth - decodeDepth(texture2D(depth, uv));
+}
+
+vec3 encode24(const in float x){
+    const vec3 code = vec3(1.0, 255.0, 65025.0);
+    vec3 pack = vec3(code * x);
+    pack.gb = fract(pack.gb);
+    pack.rg -= pack.gb * (1.0 / 256.0);
+    return pack;
+}
+
+float decode24(const in vec3 x) {
+    const vec3 decode = 1.0 / vec3(1.0, 255.0, 65025.0);
+    return dot(x, decode);
+}
+uniform vec4 uHalton;
+
+uniform float uSSAARestart;
+
+// static in place amortized supersampling
+vec4 supersample() {
+    vec4 currFragColor = TEXTURE_2D_TextureInput(gTexCoord).rgba;
+
+    float haltz = abs(uHalton.z);
+    if (haltz == 1.0) {
+        // just return the color.
+        return currFragColor;
+    }
+
+    // same pixel for same projected interpolated vertex on prev frame
+    vec4 accumColorN = TEXTURE_2D_NEAREST_TexturePrevious(gTexCoord).rgba;
+
+    // mix frames
+    float lerpFac = 1.0 / uHalton.w;
+
+    // if uTaaSSSRestart is 0.0, then we used the previous TAAed image to start supersampling
+    // we do that to avoid a sudden re-aliasing of the image (which is perceptible)
+    if (uHalton.w == 1.0) lerpFac = uSSAARestart;
+
+    if (haltz == 3.0) {
+        // No supersample, crude motion blur by accumulation
+        return mix(currFragColor, accumColorN, lerpFac);
+    }
+
+    // Supsersample, accumulation + jittering
+    // http://en.wikipedia.org/wiki/Moving_average#Cumulative_moving_average
+    // cumulative moving average over frameNum (which starts at 2)
+    // n is previous frame
+    // accumColorN = Accum(n)
+    // return value is accumColor( n +1 )
+    // Accum(n+1) = Accum(n) + ((x(n+1) - Accum(n)) / (n + 1)))
+    // formula above is equal to glsl  mix
+    return mix(accumColorN, currFragColor, lerpFac);
+}
+
+
+
+uniform vec2 uNearFar;
+
+uniform float uTaaEnabled;
+uniform mat4 uTaaInvViewMatrixLeft;
+uniform mat4 uTaaCurrentFramePVLeft;
+uniform mat4 uTaaLastFramePVLeft;
+uniform vec4 uTaaCornersCSLeft[2];
+
+#ifdef VR_ENABLED
+uniform mat4 uTaaInvViewMatrixRight;
+uniform mat4 uTaaCurrentFramePVRight;
+uniform mat4 uTaaLastFramePVRight;
+uniform vec4 uTaaCornersCSRight[2];
+#endif
+
+vec3 reconstructWSPosition(const in vec2 uv, const in vec4 corners[2], const in mat4 invView, const in float depth) {
+    vec2 finalUv = uv;
+#ifdef VR_ENABLED
+    float xViewportOffset = uv.x >= 0.5 ? -0.5 : 0.0;
+    finalUv.x = ( uv.x + xViewportOffset ) * 2.0;
+#endif
+
+    // the corners are in view space, it means if we interpolate between them we can retrieve the view space direction of the fragment
+    vec4 AB = mix(corners[0], corners[1], finalUv.x);
+
+    // multiply this view space direction by the depth gives us the view space position
+    vec3 vsPos = vec3(mix(AB.xy, AB.zw, finalUv.y), 1.0) * depth;
+
+    // multiply by the inverse of the view matrix gives us the world space position
+    return (invView * vec4(vsPos, 1.0)).xyz;
+}
+
+#define NEIGHBOUR_SET_IF_DMIN_Z_GREATER(d, x, y) if(d < dmin.z) dmin = vec3(x, y, d);
+#define NEIGHBOUR_CREATE_FROM_OFFSET(d, x, y) d = decodeDepth(TEXTURE_2D_TextureDepth(uv + vec2(x,y)));
+#define FIND_NEIGHBOUR_MIN(d, x, y) NEIGHBOUR_CREATE_FROM_OFFSET(d, x, y); NEIGHBOUR_SET_IF_DMIN_Z_GREATER(d, x, y)
+
+
+// Neighborhood clamping from Tiago Sousa
+// 4tap(decent) comment t, ml, mr, b
+// https://github.com/playdeadgames/temporal/blob/9e6a7704e69bb73f29fe393390e545b21ddfd42d/Assets/Shaders/IncDepth.cginc#L111
+// 9Tap(good) slower but nicer
+// https://github.com/playdeadgames/temporal/blob/9e6a7704e69bb73f29fe393390e545b21ddfd42d/Assets/Shaders/IncDepth.cginc#L37
+//#define CLOSEST_9TAP
+vec3 closestFragment(const in vec2 uv, const in vec2 texelSize) {
+
+    float d;
+    vec2 size = 2.0 * texelSize;
+    vec3 dmin = vec3(0.0, 0.0, 0.0);
+
+    // 5Tap
+    NEIGHBOUR_CREATE_FROM_OFFSET(dmin.z, 0.0, 0.0);
+    FIND_NEIGHBOUR_MIN(d, -size.x, size.y);
+    FIND_NEIGHBOUR_MIN(d, size.x, size.y);
+    FIND_NEIGHBOUR_MIN(d, -size.x, -size.y);
+    FIND_NEIGHBOUR_MIN(d, size.x, -size.y);
+
+#ifdef CLOSEST_9TAP
+    FIND_NEIGHBOUR_MIN(d, 0.0, size.y);
+    FIND_NEIGHBOUR_MIN(d, -size.x, 0.0);
+    FIND_NEIGHBOUR_MIN(d, size.x, 0.0);
+    FIND_NEIGHBOUR_MIN(d, 0.0, -size.y);
+#endif
+
+    return vec3(uv + dmin.xy, dmin.z);
+}
+
+// note: only clips towards aabb center (but fast!)
+// same as https://github.com/gokselgoktas/temporal-anti-aliasing/blob/master/Assets/Resources/Shaders/TemporalAntiAliasing.cginc#L199
+// which is adapted from https://github.com/playdeadgames/temporal
+// using the mathematical similar version of https://twitter.com/Stubbesaurus/status/890154773726580736
+// exhibits numerical issue (in a consistent way on intel/nvidia at least)
+vec4 clip_aabb_opti(const in vec4 minimum, const in vec4 maximum, const in vec4 color) {
+    const float eps = 0.00000001;
+
+    vec4 center = 0.5 * (maximum + minimum);
+    vec4 extents = 0.5 * (maximum - minimum) + eps;
+    vec4 offset = color - center;
+
+    vec4 ts = abs(offset / extents);
+    float t = max(max(ts.r, ts.g), max(ts.b, ts.a));
+    return center + offset / max(1.0, t);
+    // return t > 1.0 : center + offset / t : color;
+}
+
+vec4 taa(const in vec2 ssVel, const in vec2 texelSize) {
+    vec2 uv = gTexCoord;
+
+    vec4 tl = TEXTURE_2D_TextureInput(uv + vec2(-texelSize.x, texelSize.y));
+    vec4 t  = TEXTURE_2D_TextureInput(uv + vec2(0.0, texelSize.y));
+    vec4 tr = TEXTURE_2D_TextureInput(uv + vec2(texelSize.x, texelSize.y));
+
+    vec4 ml = TEXTURE_2D_TextureInput(uv + vec2(-texelSize.x, 0.0));
+    vec4 m  = TEXTURE_2D_TextureInput(uv);
+    vec4 mr = TEXTURE_2D_TextureInput(uv + vec2(texelSize.x, 0.0));
+
+    vec4 bl = TEXTURE_2D_TextureInput(uv + vec2(-texelSize.x, -texelSize.y));
+    vec4 b  = TEXTURE_2D_TextureInput(uv + vec2(0.0, -texelSize.y));
+    vec4 br = TEXTURE_2D_TextureInput(uv + vec2(texelSize.x, -texelSize.y));
+
+    // sharpen
+    // https://github.com/Unity-Technologies/PostProcessing/blob/v1/PostProcessing/Resources/Shaders/TAA.cginc#L143
+    // reduces blurring, but increases flickering with dense geometry
+    vec4 corners = 2.0 * (tr + bl + br + tl) - 2.0 * m;
+    m += (m - (corners * 0.166667)) * 2.718282 * 0.3;
+    m = max(vec4(0.0), m);
+
+    // Brian Karis neighbourhood rounding: http://advances.realtimerendering.com/s2014/epic/TemporalAA.pptx
+    // average of rounded pattern with cross pattern
+    vec4 cmin5 = min(mr, min(m, min(ml, min(t, b))));
+    vec4 cmin = min(cmin5, min(tl, min(tr, min(bl, br))));
+
+    vec4 cmax5 = max(mr, max(m, max(ml, max(t, b))));
+    vec4 cmax = max(cmax5, max(tl, max(tr, max(bl, br))));
+
+    cmin = 0.5 * (cmin + cmin5);
+    cmax = 0.5 * (cmax + cmax5);
+
+    vec4 previousColor = TEXTURE_2D_TexturePrevious(uv - ssVel);
+    previousColor = clip_aabb_opti(cmin, cmax, previousColor);
+
+    float lum0 = getLuminance(m.rgb);
+    float lum1 = getLuminance(previousColor.rgb);
+    float diff = abs(lum0 - lum1) / max(lum0, max(lum1, 0.2));
+    float unbiased_weight = 1.0 - diff;
+    float feedback = mix(FEEDBACK_MIN, FEEDBACK_MAX, unbiased_weight * unbiased_weight);
+
+    return mix(m, previousColor, feedback);
+}
+
+vec2 computeSSVelocity(const in vec3 wsPos, const in mat4 currentFrameProjView, const in mat4 lastFrameProjView, const in bool rightEye)
+{
+    vec4 ssCurrentPos = currentFrameProjView * vec4(wsPos, 1.0);
+    vec4 ssPrevPos = lastFrameProjView * vec4(wsPos, 1.0);
+
+    vec2 ndcCurrent = ssCurrentPos.xy / ssCurrentPos.w;
+    vec2 ndcPrev = ssPrevPos.xy / ssPrevPos.w;
+
+    //ndcPrev = clamp(ndcPrev, vec2(-1.0), vec2(1.0));
+    if(ndcPrev.x >= 1.0 || ndcPrev.x <= -1.0 || ndcPrev.x >= 1.0 || ndcPrev.y <= -1.0)
+        return vec2(0.0);
+
+#ifdef VR_ENABLED
+    ndcCurrent.x /= 2.0;
+    ndcPrev.x /= 2.0;
+
+    if (rightEye) {
+        ndcCurrent.x += 0.5;
+        ndcPrev.x += 0.5;
+    }
+#endif
+
+    return 0.5 * (ndcCurrent - ndcPrev);
+}
+
+
+vec4 computeTaa(const in mat4 invView, const in mat4 currentFrameProjView, const in mat4 lastFrameProjView, const in vec4 corners[2]) {
+    vec2 uv = gTexCoord;
+    float haltz = abs(uHalton.z);
+    if (haltz == 1.0) {
+        vec2 texelSize = vec2(1.0) / uTextureInputSize;
+        vec3 closest = closestFragment(uv, texelSize);
+
+        // discard background fragments to save fillrate
+        // make sure the mesh isn't transparent
+        if (closest.z >= 1.0
+#ifdef TAA_TRANSPARENT
+            && decodeAlpha(TEXTURE_2D_TextureDepth(closest.xy)) == 0.0
+#endif
+        ) {
+            // unjitter for fixed background with highres pattern or text
+            return TEXTURE_2D_TextureInput(uv - 0.5 * uHalton.xy * texelSize);
+        }
+
+        float depth = -(uNearFar.x + (uNearFar.y - uNearFar.x) * closest.z);
+        vec3 ws = reconstructWSPosition(closest.xy, corners, invView, depth);
+
+        vec2 ssVel = computeSSVelocity(ws, currentFrameProjView, lastFrameProjView, uv.x >= 0.5);
+        return taa(ssVel, texelSize);
+    }
+
+    return supersample();
+}
+
+// temporal anti-aliasing from Playdead's Inside
+// slides: http://www.gdcvault.com/play/1022970/Temporal-Reprojection-Anti-Aliasing-in
+// sources: https://github.com/playdeadgames/temporal
+vec4 supersampleTaa() {
+    if (uTaaEnabled == 0.0) {
+        return supersample();
+    }
+
+#ifdef VR_ENABLED
+    // left and right eyes have different matrices
+    if (gTexCoord.x >= 0.5) {
+        return computeTaa(uTaaInvViewMatrixRight, uTaaCurrentFramePVRight, uTaaLastFramePVRight, uTaaCornersCSRight);
+    }
+#endif
+
+    return computeTaa(uTaaInvViewMatrixLeft, uTaaCurrentFramePVLeft, uTaaLastFramePVLeft, uTaaCornersCSLeft);
+}
+
+
+void main() {
+    gTexCoord = gl_FragCoord.xy / uTextureOutputSize.xy;
+    vec4 color = supersampleTaa();
+
+
+    gl_FragColor = color;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+#define SHADER_NAME supersampleTaa
+
+__ENDPROGRAM__

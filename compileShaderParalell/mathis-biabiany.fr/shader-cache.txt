@@ -1,0 +1,2643 @@
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+	attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+	attribute vec3 morphTarget0;
+	attribute vec3 morphTarget1;
+	attribute vec3 morphTarget2;
+	attribute vec3 morphTarget3;
+	#ifdef USE_MORPHNORMALS
+		attribute vec3 morphNormal0;
+		attribute vec3 morphNormal1;
+		attribute vec3 morphNormal2;
+		attribute vec3 morphNormal3;
+	#else
+		attribute vec3 morphTarget4;
+		attribute vec3 morphTarget5;
+		attribute vec3 morphTarget6;
+		attribute vec3 morphTarget7;
+	#endif
+#endif
+#ifdef USE_SKINNING
+	attribute vec4 skinIndex;
+	attribute vec4 skinWeight;
+#endif
+
+#define GLSLIFY 1
+varying vec2 vUv;
+
+void main() {
+    vUv = vec2( uv.x, uv.y );
+    gl_Position = projectionMatrix * modelViewMatrix * vec4( position, 1.0 );
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+	#define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+	return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+	color *= toneMappingExposure;
+	return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+	color *= toneMappingExposure;
+	return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+	color *= toneMappingExposure;
+	color = max( vec3( 0.0 ), color - 0.004 );
+	return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+	return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+	return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+	return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+	return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+	return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+	return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+	float maxComponent = max( max( value.r, value.g ), value.b );
+	float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+	return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+	return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+	float maxRGB = max( value.x, max( value.g, value.b ) );
+	float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+	M            = ceil( M * 255.0 ) / 255.0;
+	return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+	return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+	float maxRGB = max( value.x, max( value.g, value.b ) );
+	float D      = max( maxRange / maxRGB, 1.0 );
+	D            = min( floor( D ) / 255.0, 1.0 );
+	return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+	vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+	Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+	vec4 vResult;
+	vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+	float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+	vResult.w = fract(Le);
+	vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+	return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+	float Le = value.z * 255.0 + value.w;
+	vec3 Xp_Y_XYZp;
+	Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+	Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+	Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+	vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+	return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+#define GLSLIFY 1
+uniform sampler2D t_diffuse;
+
+varying vec2 vUv;
+
+void main( void ) {
+
+  vec2 uv = vUv;
+
+  vec4 texture = texture2D(t_diffuse, uv);
+
+  // vec3 color = texture.rgb * 0.998 - 0.0052;
+  vec3 color = texture.rgb * 0.999 - 0.00197;
+
+  float alpha = 1.;
+
+  gl_FragColor = vec4( color, alpha );
+}
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+	attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+	attribute vec3 morphTarget0;
+	attribute vec3 morphTarget1;
+	attribute vec3 morphTarget2;
+	attribute vec3 morphTarget3;
+	#ifdef USE_MORPHNORMALS
+		attribute vec3 morphNormal0;
+		attribute vec3 morphNormal1;
+		attribute vec3 morphNormal2;
+		attribute vec3 morphNormal3;
+	#else
+		attribute vec3 morphTarget4;
+		attribute vec3 morphTarget5;
+		attribute vec3 morphTarget6;
+		attribute vec3 morphTarget7;
+	#endif
+#endif
+#ifdef USE_SKINNING
+	attribute vec4 skinIndex;
+	attribute vec4 skinWeight;
+#endif
+
+#define GLSLIFY 1
+attribute vec4 a_pos;
+attribute vec3 a_scale;
+attribute vec4 a_orientation;
+attribute vec2 aOffset;
+attribute float aSpeed;
+attribute float aStartPosition;
+attribute float aVertcalOffset;
+attribute float aDirection;
+
+uniform float uTime;
+uniform float uRange;
+uniform float uGlobalScale;
+
+varying vec2 vUv;
+varying vec2 vOffset;
+varying float vAlpha;
+
+mat3 quatToMatrix(vec4 q) {
+  mat3 mat;
+
+  float sqw = q.w * q.w;
+  float sqx = q.x * q.x;
+  float sqy = q.y * q.y;
+  float sqz = q.z * q.z;
+
+  // invs (inverse square length) is only required if quaternion is not already normalised
+  float invs = 1.0 / (sqx + sqy + sqz + sqw);
+  mat[0][0] = ( sqx - sqy - sqz + sqw) * invs; // since sqw + sqx + sqy + sqz =1/invs*invs
+  mat[1][1] = (-sqx + sqy - sqz + sqw) * invs;
+  mat[2][2] = (-sqx - sqy + sqz + sqw) * invs;
+
+  float tmp1 = q.x * q.y;
+  float tmp2 = q.z * q.w;
+  mat[1][0] = 2.0 * (tmp1 + tmp2) * invs;
+  mat[0][1] = 2.0 * (tmp1 - tmp2) * invs;
+
+  tmp1 = q.x * q.z;
+  tmp2 = q.y * q.w;
+  mat[2][0] = 2.0 * (tmp1 - tmp2) * invs;
+  mat[0][2] = 2.0 * (tmp1 + tmp2) * invs;
+  tmp1 = q.y * q.z;
+  tmp2 = q.x * q.w;
+  mat[2][1] = 2.0 * (tmp1 + tmp2) * invs;
+  mat[1][2] = 2.0 * (tmp1 - tmp2) * invs;
+
+  return mat;
+}
+
+void main() {
+
+  vec3 pos = a_pos.xyz;
+  pos.x = mod(uTime * aSpeed * 200. * aDirection + aStartPosition, uRange) - uRange * 0.5;
+  pos.y += sin( uTime * aSpeed ) * aVertcalOffset;
+  // pos.x += uTime * 10.;
+
+  vec3 scale = a_scale;
+  // scale.x += ( sin(uTime * aSpeed) + 1. ) * 1.;
+  scale.y *= ( sin(uTime * aSpeed * 5.) + 1. ) * 1. * uGlobalScale;
+
+  vec4 orientation = a_orientation;
+
+  mat3 rotation = quatToMatrix(orientation);
+
+  vec4 viewModelPosition = modelViewMatrix * vec4(position * scale * rotation + pos, 1.0);
+  gl_Position = projectionMatrix * viewModelPosition;
+
+  vUv = uv;
+  vAlpha = a_pos.w;
+  vOffset = aOffset;
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+	#define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+	return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+	color *= toneMappingExposure;
+	return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+	color *= toneMappingExposure;
+	return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+	color *= toneMappingExposure;
+	color = max( vec3( 0.0 ), color - 0.004 );
+	return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+	return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+	return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+	return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+	return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+	return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+	return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+	float maxComponent = max( max( value.r, value.g ), value.b );
+	float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+	return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+	return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+	float maxRGB = max( value.x, max( value.g, value.b ) );
+	float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+	M            = ceil( M * 255.0 ) / 255.0;
+	return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+	return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+	float maxRGB = max( value.x, max( value.g, value.b ) );
+	float D      = max( maxRange / maxRGB, 1.0 );
+	D            = min( floor( D ) / 255.0, 1.0 );
+	return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+	vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+	Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+	vec4 vResult;
+	vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+	float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+	vResult.w = fract(Le);
+	vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+	return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+	float Le = value.z * 255.0 + value.w;
+	vec3 Xp_Y_XYZp;
+	Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+	Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+	Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+	vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+	return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+#define GLSLIFY 1
+uniform sampler2D tDiffuse;
+varying vec2 vUv;
+varying vec2 vOffset;
+varying float vAlpha;
+
+void main( void ) {
+
+    vec2 uv = vec2( vOffset.x + vUv.x * 0.25, vOffset.y + vUv.y * 0.25 );
+    vec4 texture = texture2D(tDiffuse, uv);
+
+    // vec3 color = vec3(texture.rgb);
+    vec3 color = vec3(texture.a);
+    float alpha = texture.a * vAlpha;
+
+    gl_FragColor = vec4(color, alpha);
+}
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME LuminosityMaterial
+#define COLOR 1
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+    attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+    attribute vec3 morphTarget0;
+    attribute vec3 morphTarget1;
+    attribute vec3 morphTarget2;
+    attribute vec3 morphTarget3;
+    #ifdef USE_MORPHNORMALS
+        attribute vec3 morphNormal0;
+        attribute vec3 morphNormal1;
+        attribute vec3 morphNormal2;
+        attribute vec3 morphNormal3;
+    #else
+        attribute vec3 morphTarget4;
+        attribute vec3 morphTarget5;
+        attribute vec3 morphTarget6;
+        attribute vec3 morphTarget7;
+    #endif
+#endif
+#ifdef USE_SKINNING
+    attribute vec4 skinIndex;
+    attribute vec4 skinWeight;
+#endif
+
+varying vec2 vUv;
+
+void main() {
+
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME LuminosityMaterial
+#define COLOR 1
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+    #define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+    return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    color = max( vec3( 0.0 ), color - 0.004 );
+    return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+    return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+    return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+    return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+    return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+    float maxComponent = max( max( value.r, value.g ), value.b );
+    float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+    return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+    M            = ceil( M * 255.0 ) / 255.0;
+    return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float D      = max( maxRange / maxRGB, 1.0 );
+    D            = min( floor( D ) / 255.0, 1.0 );
+    return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+    vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+    Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+    vec4 vResult;
+    vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+    float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+    vResult.w = fract(Le);
+    vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+    return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+    float Le = value.z * 255.0 + value.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+    Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+    vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+    return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+#define PI 3.14159265359
+#define PI2 6.28318530718
+#define PI_HALF 1.5707963267949
+#define RECIPROCAL_PI 0.31830988618
+#define RECIPROCAL_PI2 0.15915494
+#define LOG2 1.442695
+#define EPSILON 1e-6
+#define saturate(a) clamp( a, 0.0, 1.0 )
+#define whiteCompliment(a) ( 1.0 - saturate( a ) )
+float pow2( const in float x ) { return x*x; }
+float pow3( const in float x ) { return x*x*x; }
+float pow4( const in float x ) { float x2 = x*x; return x2*x2; }
+float average( const in vec3 color ) { return dot( color, vec3( 0.3333 ) ); }
+highp float rand( const in vec2 uv ) {
+    const highp float a = 12.9898, b = 78.233, c = 43758.5453;
+    highp float dt = dot( uv.xy, vec2( a,b ) ), sn = mod( dt, PI );
+    return fract(sin(sn) * c);
+}
+struct IncidentLight {
+    vec3 color;
+    vec3 direction;
+    bool visible;
+};
+struct ReflectedLight {
+    vec3 directDiffuse;
+    vec3 directSpecular;
+    vec3 indirectDiffuse;
+    vec3 indirectSpecular;
+};
+struct GeometricContext {
+    vec3 position;
+    vec3 normal;
+    vec3 viewDir;
+};
+vec3 transformDirection( in vec3 dir, in mat4 matrix ) {
+    return normalize( ( matrix * vec4( dir, 0.0 ) ).xyz );
+}
+vec3 inverseTransformDirection( in vec3 dir, in mat4 matrix ) {
+    return normalize( ( vec4( dir, 0.0 ) * matrix ).xyz );
+}
+vec3 projectOnPlane(in vec3 point, in vec3 pointOnPlane, in vec3 planeNormal ) {
+    float distance = dot( planeNormal, point - pointOnPlane );
+    return - distance * planeNormal + point;
+}
+float sideOfPlane( in vec3 point, in vec3 pointOnPlane, in vec3 planeNormal ) {
+    return sign( dot( point - pointOnPlane, planeNormal ) );
+}
+vec3 linePlaneIntersect( in vec3 pointOnLine, in vec3 lineDirection, in vec3 pointOnPlane, in vec3 planeNormal ) {
+    return lineDirection * ( dot( planeNormal, pointOnPlane - pointOnLine ) / dot( planeNormal, lineDirection ) ) + pointOnLine;
+}
+mat3 transposeMat3( const in mat3 m ) {
+    mat3 tmp;
+    tmp[ 0 ] = vec3( m[ 0 ].x, m[ 1 ].x, m[ 2 ].x );
+    tmp[ 1 ] = vec3( m[ 0 ].y, m[ 1 ].y, m[ 2 ].y );
+    tmp[ 2 ] = vec3( m[ 0 ].z, m[ 1 ].z, m[ 2 ].z );
+    return tmp;
+}
+float linearToRelativeLuminance( const in vec3 color ) {
+    vec3 weights = vec3( 0.2126, 0.7152, 0.0722 );
+    return dot( weights, color.rgb );
+}
+
+
+uniform sampler2D tDiffuse;
+uniform float distinction;
+uniform vec2 range;
+
+varying vec2 vUv;
+
+void main() {
+
+    vec4 texel = texture2D(tDiffuse, vUv);
+    float l = linearToRelativeLuminance(texel.rgb);
+
+    #ifdef RANGE
+
+        float low = step(range.x, l);
+        float high = step(l, range.y);
+
+        // Apply the mask.
+        l *= low * high;
+
+    #endif
+
+    l = pow(abs(l), distinction);
+
+    #ifdef COLOR
+
+        gl_FragColor = vec4(texel.rgb * l, texel.a);
+
+    #else
+
+        gl_FragColor = vec4(l, l, l, texel.a);
+
+    #endif
+
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ConvolutionMaterial
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+    attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+    attribute vec3 morphTarget0;
+    attribute vec3 morphTarget1;
+    attribute vec3 morphTarget2;
+    attribute vec3 morphTarget3;
+    #ifdef USE_MORPHNORMALS
+        attribute vec3 morphNormal0;
+        attribute vec3 morphNormal1;
+        attribute vec3 morphNormal2;
+        attribute vec3 morphNormal3;
+    #else
+        attribute vec3 morphTarget4;
+        attribute vec3 morphTarget5;
+        attribute vec3 morphTarget6;
+        attribute vec3 morphTarget7;
+    #endif
+#endif
+#ifdef USE_SKINNING
+    attribute vec4 skinIndex;
+    attribute vec4 skinWeight;
+#endif
+
+uniform vec2 texelSize;
+uniform vec2 halfTexelSize;
+uniform float kernel;
+
+varying vec2 vUv0;
+varying vec2 vUv1;
+varying vec2 vUv2;
+varying vec2 vUv3;
+
+void main() {
+
+    vec2 dUv = (texelSize * vec2(kernel)) + halfTexelSize;
+
+    vUv0 = vec2(uv.x - dUv.x, uv.y + dUv.y);
+    vUv1 = vec2(uv.x + dUv.x, uv.y + dUv.y);
+    vUv2 = vec2(uv.x + dUv.x, uv.y - dUv.y);
+    vUv3 = vec2(uv.x - dUv.x, uv.y - dUv.y);
+
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ConvolutionMaterial
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+    #define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+    return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    color = max( vec3( 0.0 ), color - 0.004 );
+    return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+    return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+    return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+    return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+    return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+    float maxComponent = max( max( value.r, value.g ), value.b );
+    float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+    return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+    M            = ceil( M * 255.0 ) / 255.0;
+    return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float D      = max( maxRange / maxRGB, 1.0 );
+    D            = min( floor( D ) / 255.0, 1.0 );
+    return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+    vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+    Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+    vec4 vResult;
+    vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+    float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+    vResult.w = fract(Le);
+    vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+    return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+    float Le = value.z * 255.0 + value.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+    Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+    vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+    return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+#define PI 3.14159265359
+#define PI2 6.28318530718
+#define PI_HALF 1.5707963267949
+#define RECIPROCAL_PI 0.31830988618
+#define RECIPROCAL_PI2 0.15915494
+#define LOG2 1.442695
+#define EPSILON 1e-6
+#define saturate(a) clamp( a, 0.0, 1.0 )
+#define whiteCompliment(a) ( 1.0 - saturate( a ) )
+float pow2( const in float x ) { return x*x; }
+float pow3( const in float x ) { return x*x*x; }
+float pow4( const in float x ) { float x2 = x*x; return x2*x2; }
+float average( const in vec3 color ) { return dot( color, vec3( 0.3333 ) ); }
+highp float rand( const in vec2 uv ) {
+    const highp float a = 12.9898, b = 78.233, c = 43758.5453;
+    highp float dt = dot( uv.xy, vec2( a,b ) ), sn = mod( dt, PI );
+    return fract(sin(sn) * c);
+}
+struct IncidentLight {
+    vec3 color;
+    vec3 direction;
+    bool visible;
+};
+struct ReflectedLight {
+    vec3 directDiffuse;
+    vec3 directSpecular;
+    vec3 indirectDiffuse;
+    vec3 indirectSpecular;
+};
+struct GeometricContext {
+    vec3 position;
+    vec3 normal;
+    vec3 viewDir;
+};
+vec3 transformDirection( in vec3 dir, in mat4 matrix ) {
+    return normalize( ( matrix * vec4( dir, 0.0 ) ).xyz );
+}
+vec3 inverseTransformDirection( in vec3 dir, in mat4 matrix ) {
+    return normalize( ( vec4( dir, 0.0 ) * matrix ).xyz );
+}
+vec3 projectOnPlane(in vec3 point, in vec3 pointOnPlane, in vec3 planeNormal ) {
+    float distance = dot( planeNormal, point - pointOnPlane );
+    return - distance * planeNormal + point;
+}
+float sideOfPlane( in vec3 point, in vec3 pointOnPlane, in vec3 planeNormal ) {
+    return sign( dot( point - pointOnPlane, planeNormal ) );
+}
+vec3 linePlaneIntersect( in vec3 pointOnLine, in vec3 lineDirection, in vec3 pointOnPlane, in vec3 planeNormal ) {
+    return lineDirection * ( dot( planeNormal, pointOnPlane - pointOnLine ) / dot( planeNormal, lineDirection ) ) + pointOnLine;
+}
+mat3 transposeMat3( const in mat3 m ) {
+    mat3 tmp;
+    tmp[ 0 ] = vec3( m[ 0 ].x, m[ 1 ].x, m[ 2 ].x );
+    tmp[ 1 ] = vec3( m[ 0 ].y, m[ 1 ].y, m[ 2 ].y );
+    tmp[ 2 ] = vec3( m[ 0 ].z, m[ 1 ].z, m[ 2 ].z );
+    return tmp;
+}
+float linearToRelativeLuminance( const in vec3 color ) {
+    vec3 weights = vec3( 0.2126, 0.7152, 0.0722 );
+    return dot( weights, color.rgb );
+}
+
+#if defined( DITHERING )
+    vec3 dithering( vec3 color ) {
+        float grid_position = rand( gl_FragCoord.xy );
+        vec3 dither_shift_RGB = vec3( 0.25 / 255.0, -0.25 / 255.0, 0.25 / 255.0 );
+        dither_shift_RGB = mix( 2.0 * dither_shift_RGB, -2.0 * dither_shift_RGB, grid_position );
+        return color + dither_shift_RGB;
+    }
+#endif
+
+
+uniform sampler2D tDiffuse;
+
+varying vec2 vUv0;
+varying vec2 vUv1;
+varying vec2 vUv2;
+varying vec2 vUv3;
+
+void main() {
+
+    // Sample top left texel.
+    vec4 sum = texture2D(tDiffuse, vUv0);
+
+    // Sample top right texel.
+    sum += texture2D(tDiffuse, vUv1);
+
+    // Sample bottom right texel.
+    sum += texture2D(tDiffuse, vUv2);
+
+    // Sample bottom left texel.
+    sum += texture2D(tDiffuse, vUv3);
+
+    // Compute the average.
+    gl_FragColor = sum * 0.25;
+
+#if defined( DITHERING )
+  gl_FragColor.rgb = dithering( gl_FragColor.rgb );
+#endif
+
+
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME CombineMaterial
+#define SCREEN_MODE 1
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+	attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+	attribute vec3 morphTarget0;
+	attribute vec3 morphTarget1;
+	attribute vec3 morphTarget2;
+	attribute vec3 morphTarget3;
+	#ifdef USE_MORPHNORMALS
+		attribute vec3 morphNormal0;
+		attribute vec3 morphNormal1;
+		attribute vec3 morphNormal2;
+		attribute vec3 morphNormal3;
+	#else
+		attribute vec3 morphTarget4;
+		attribute vec3 morphTarget5;
+		attribute vec3 morphTarget6;
+		attribute vec3 morphTarget7;
+	#endif
+#endif
+#ifdef USE_SKINNING
+	attribute vec4 skinIndex;
+	attribute vec4 skinWeight;
+#endif
+
+varying vec2 vUv;
+
+void main() {
+
+	vUv = uv;
+	gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME CombineMaterial
+#define SCREEN_MODE 1
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+    #define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+    return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    color = max( vec3( 0.0 ), color - 0.004 );
+    return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+    return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+    return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+    return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+    return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+    float maxComponent = max( max( value.r, value.g ), value.b );
+    float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+    return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+    M            = ceil( M * 255.0 ) / 255.0;
+    return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float D      = max( maxRange / maxRGB, 1.0 );
+    D            = min( floor( D ) / 255.0, 1.0 );
+    return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+    vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+    Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+    vec4 vResult;
+    vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+    float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+    vResult.w = fract(Le);
+    vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+    return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+    float Le = value.z * 255.0 + value.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+    Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+    vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+    return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+uniform sampler2D texture1;
+uniform sampler2D texture2;
+
+uniform float opacity1;
+uniform float opacity2;
+
+varying vec2 vUv;
+
+void main() {
+
+    vec4 texel1 = opacity1 * texture2D(texture1, vUv);
+    vec4 texel2 = opacity2 * texture2D(texture2, vUv);
+
+    #ifdef SCREEN_MODE
+
+        vec3 invTexel1 = vec3(1.0) - texel1.rgb;
+        vec3 invTexel2 = vec3(1.0) - texel2.rgb;
+
+        vec4 color = vec4(
+            vec3(1.0) - invTexel1 * invTexel2,
+            texel1.a + texel2.a
+        );
+
+    #else
+
+        vec4 color = texel1 + texel2;
+
+    #endif
+
+    gl_FragColor = color;
+
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+    attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+    attribute vec3 morphTarget0;
+    attribute vec3 morphTarget1;
+    attribute vec3 morphTarget2;
+    attribute vec3 morphTarget3;
+    #ifdef USE_MORPHNORMALS
+        attribute vec3 morphNormal0;
+        attribute vec3 morphNormal1;
+        attribute vec3 morphNormal2;
+        attribute vec3 morphNormal3;
+    #else
+        attribute vec3 morphTarget4;
+        attribute vec3 morphTarget5;
+        attribute vec3 morphTarget6;
+        attribute vec3 morphTarget7;
+    #endif
+#endif
+#ifdef USE_SKINNING
+    attribute vec4 skinIndex;
+    attribute vec4 skinWeight;
+#endif
+
+#define GLSLIFY 1
+varying vec2 vUv;
+
+void main() {
+
+  vUv = uv;
+
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+    #define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+    return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    color = max( vec3( 0.0 ), color - 0.004 );
+    return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+    return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+    return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+    return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+    return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+    float maxComponent = max( max( value.r, value.g ), value.b );
+    float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+    return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+    M            = ceil( M * 255.0 ) / 255.0;
+    return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float D      = max( maxRange / maxRGB, 1.0 );
+    D            = min( floor( D ) / 255.0, 1.0 );
+    return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+    vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+    Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+    vec4 vResult;
+    vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+    float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+    vResult.w = fract(Le);
+    vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+    return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+    float Le = value.z * 255.0 + value.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+    Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+    vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+    return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+#define GLSLIFY 1
+uniform sampler2D tDiffuse;
+
+varying vec2 vUv;
+
+void main() {
+
+  vec4 texture = texture2D(tDiffuse, vUv);
+
+  vec3 color = texture.rgb;
+  float alpha = texture.a;
+
+  gl_FragColor = vec4(color, alpha);
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+    attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+    attribute vec3 morphTarget0;
+    attribute vec3 morphTarget1;
+    attribute vec3 morphTarget2;
+    attribute vec3 morphTarget3;
+    #ifdef USE_MORPHNORMALS
+        attribute vec3 morphNormal0;
+        attribute vec3 morphNormal1;
+        attribute vec3 morphNormal2;
+        attribute vec3 morphNormal3;
+    #else
+        attribute vec3 morphTarget4;
+        attribute vec3 morphTarget5;
+        attribute vec3 morphTarget6;
+        attribute vec3 morphTarget7;
+    #endif
+#endif
+#ifdef USE_SKINNING
+    attribute vec4 skinIndex;
+    attribute vec4 skinWeight;
+#endif
+
+#define GLSLIFY 1
+varying vec2 vUv;
+
+// uniform float uTime;
+// uniform sampler2D tDisplacement;
+
+void main() {
+
+  // vec4 displacementTexture = texture2D(tDisplacement, uv + uTime * .1);
+
+  // vec3 pos = position;
+  // pos.z += displacementTexture.r * 100.;
+
+  vUv = uv;
+
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+    #define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+    return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    color = max( vec3( 0.0 ), color - 0.004 );
+    return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+    return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+    return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+    return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+    return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+    float maxComponent = max( max( value.r, value.g ), value.b );
+    float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+    return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+    M            = ceil( M * 255.0 ) / 255.0;
+    return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float D      = max( maxRange / maxRGB, 1.0 );
+    D            = min( floor( D ) / 255.0, 1.0 );
+    return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+    vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+    Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+    vec4 vResult;
+    vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+    float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+    vResult.w = fract(Le);
+    vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+    return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+    float Le = value.z * 255.0 + value.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+    Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+    vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+    return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+#define GLSLIFY 1
+float random (in vec2 st) {
+    return fract(sin(dot(st.xy,
+                         vec2(12.9898,78.233)))*
+        43758.5453123);
+}
+
+// Based on Morgan McGuire @morgan3d
+// https://www.shadertoy.com/view/4dS3Wd
+float noise (in vec2 st) {
+    vec2 i = floor(st);
+    vec2 f = fract(st);
+
+    // Four corners in 2D of a tile
+    float a = random(i);
+    float b = random(i + vec2(1.0, 0.0));
+    float c = random(i + vec2(0.0, 1.0));
+    float d = random(i + vec2(1.0, 1.0));
+
+    vec2 u = f * f * (3.0 - 2.0 * f);
+
+    return mix(a, b, u.x) +
+            (c - a)* u.y * (1.0 - u.x) +
+            (d - b) * u.x * u.y;
+}
+
+#define OCTAVES 4
+float fbm (in vec2 st) {
+    // Initial values
+    float value = 0.0;
+    float amplitude = .5;
+    float frequency = 0.;
+    //
+    // Loop of octaves
+    for (int i = 0; i < OCTAVES; i++) {
+        value += amplitude * noise(st);
+        st *= 2.;
+        amplitude *= .5;
+    }
+    return value;
+}
+
+#define CUSTOM_OCTAVES 2
+float customFBM (in vec2 st) {
+    // Initial values
+    float value = 0.0;
+    float amplitude = .5;
+    float frequency = 0.;
+    //
+    // Loop of octaves
+    for (int i = 0; i < CUSTOM_OCTAVES; i++) {
+        value += amplitude * noise(st);
+        st *= 2.;
+        amplitude *= .5;
+    }
+    return value;
+}
+
+uniform float uTime;
+uniform float uActive;
+uniform float uShapeActive;
+uniform sampler2D tMask;
+uniform sampler2D tMaskOpacity;
+uniform sampler2D tDisplacement;
+varying vec2 vUv;
+
+void main() {
+
+  vec4 displacementTexture = texture2D(tDisplacement, vUv + uTime * 0.1);
+  vec4 cloudMaskTexture = texture2D(tDisplacement, vUv + uTime * 0.02);
+  vec4 maskTexture = texture2D(tMask, vec2(vUv.x + displacementTexture.r * .05  , vUv.y + displacementTexture.r * .05 ));
+  vec4 maskOpacityTexture = texture2D(tMaskOpacity, vec2(vUv.x + displacementTexture.r * .05  , vUv.y + displacementTexture.r * .05 ));
+
+  vec3 firstColor = vec3(0., 146. / 255. , 142. / 255. );
+  // vec3 secondColor = vec3(0., 33. / 255. , 67. / 255. );
+  vec3 secondColor = vec3(22./255., 11. / 255. , ( 91. + sin(uTime) * 20. ) / 255. );
+
+  // vec3 thirdColor = vec3(248. / 255., 208. / 255. , 175. / 255. );
+  // vec3 fourthColor = vec3(201. / 255., 132. / 255. , 110. / 255. );
+  // vec3 fifthColor = vec3(60. / 255., 65. / 255. , 96. / 255. );
+
+  // vec3 thirdColor = vec3(0., 146. / 255. , 142. / 255. );
+  // vec3 fourthColor = vec3(0., 33. / 255. , 67. / 255. );
+  // vec3 fifthColor = vec3(0., 89.5 / 255. , 99.5 / 255. );
+
+  vec3 thirdColor = vec3(0./255., 146. / 255. , 142. / 255. );
+  vec3 fourthColor = vec3(0./255., 0. / 255. , 37. / 255. );
+  vec3 fifthColor = vec3(35./255., 89.5 / 255. , 99.5 / 255. );
+
+
+  // float noise1 = fbm(vUv * 10. + uTime);
+  // float noise2 = fbm(-vUv * 10.);
+  // float noise3 = fbm( vUv * vec2(noise1, noise2 ));
+  // // vec3 color = vec3(noise);
+
+  vec2 secondQ = vec2(0.);
+  secondQ.x = customFBM( vUv / 0.05 + 0.0*uTime * 20.);
+  // secondQ.y = fbm( vUv / 0.05 + vec2(1.0));
+
+  vec2 secondR = vec2(0.);
+  secondR.x = customFBM( vUv + 1.0*secondQ + vec2(1.7,5.2)+ 1.*uTime );
+  // secondR.y = fbm( vUv + 1.0*secondQ + vec2(8.3,2.8)+ 0.26*uTime);
+
+  // float secondF = fbm(vUv+secondR);
+
+  // float secondMixValue = clamp((secondF*secondF)*2.5,0.0,2.0);
+  // float secondMixValue = clamp((secondR.x*secondR.x)*2.5,0.0,2.0);
+  float secondMixValue = clamp((secondR.x*secondR.x)*3.5,0.0,2.0);
+
+  vec3 secondFinalColor = mix(thirdColor, fourthColor, secondMixValue);
+  secondFinalColor = mix(fifthColor, secondFinalColor, cloudMaskTexture.r * maskTexture.a);
+  secondFinalColor *= maskTexture.a;
+
+
+  vec2 q = vec2(0.);
+  q.x = fbm( vUv + 0.0*uTime);
+  q.y = fbm( vUv + vec2(1.0));
+
+  vec2 r = vec2(0.);
+  r.x = fbm( vUv + 1.0*q + vec2(1.7,9.2)+ 0.1*uTime );
+  r.y = fbm( vUv + 1.0*q + vec2(8.3,2.8)+ 0.052*uTime);
+
+  float f = fbm(vUv+r);
+  float mixValue = clamp((f*f)*2.2,0.0,2.0);
+
+  vec3 firstFinalColor = mix(firstColor, mix(secondColor, vec3(0.), clamp(length(r.x),0.0,1.0)), mixValue);
+  // firstFinalColor -= max( secondFinalColor.b, max(secondFinalColor.r, secondFinalColor.g) ) * smoothstep(0.99, 1., maskOpacityTexture.a) * uShapeActive;
+  firstFinalColor = max( vec3(0.), firstFinalColor );
+
+  vec3 color = mix(firstFinalColor, secondFinalColor, smoothstep(0.43, 1., maskOpacityTexture.a * uActive) );
+
+  // color = mix(color, vec3(0.), clamp(length(q),0.0,1.0));
+  // float alpha = 1.;
+  float alpha = 1. - max(color.g, max(color.r, color.g) );
+  alpha -= smoothstep( max( 0., 0.5 - abs( uActive - 1. ) ), .9 + abs( uActive - 1.), vUv.x ) * uActive;
+  alpha -= abs(uActive - 1.) * 0.4;
+  // float alpha = 1. * smoothstep( 0., .1, max(max( secondFinalColor.r, secondFinalColor.g), secondFinalColor.b ) );
+
+  // gl_FragColor = displacementTexture;
+  gl_FragColor = vec4(color, alpha);
+  // gl_FragColor = vec4(maskTexture.r);
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+    attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+    attribute vec3 morphTarget0;
+    attribute vec3 morphTarget1;
+    attribute vec3 morphTarget2;
+    attribute vec3 morphTarget3;
+    #ifdef USE_MORPHNORMALS
+        attribute vec3 morphNormal0;
+        attribute vec3 morphNormal1;
+        attribute vec3 morphNormal2;
+        attribute vec3 morphNormal3;
+    #else
+        attribute vec3 morphTarget4;
+        attribute vec3 morphTarget5;
+        attribute vec3 morphTarget6;
+        attribute vec3 morphTarget7;
+    #endif
+#endif
+#ifdef USE_SKINNING
+    attribute vec4 skinIndex;
+    attribute vec4 skinWeight;
+#endif
+
+#define GLSLIFY 1
+uniform float u_time;
+uniform float u_delta;
+
+attribute float a_speed;
+attribute float a_offset;
+attribute float a_alpha;
+
+varying vec3 vPos;
+varying float vAlpha;
+
+mat3 quatToMatrix(vec4 q) {
+  mat3 mat;
+
+  float sqw = q.w * q.w;
+  float sqx = q.x * q.x;
+  float sqy = q.y * q.y;
+  float sqz = q.z * q.z;
+
+  // invs (inverse square length) is only required if quaternion is not already normalised
+  float invs = 1.0 / (sqx + sqy + sqz + sqw);
+  mat[0][0] = ( sqx - sqy - sqz + sqw) * invs; // since sqw + sqx + sqy + sqz =1/invs*invs
+  mat[1][1] = (-sqx + sqy - sqz + sqw) * invs;
+  mat[2][2] = (-sqx - sqy + sqz + sqw) * invs;
+
+  float tmp1 = q.x * q.y;
+  float tmp2 = q.z * q.w;
+  mat[1][0] = 2.0 * (tmp1 + tmp2) * invs;
+  mat[0][1] = 2.0 * (tmp1 - tmp2) * invs;
+
+  tmp1 = q.x * q.z;
+  tmp2 = q.y * q.w;
+  mat[2][0] = 2.0 * (tmp1 - tmp2) * invs;
+  mat[0][2] = 2.0 * (tmp1 + tmp2) * invs;
+  tmp1 = q.y * q.z;
+  tmp2 = q.x * q.w;
+  mat[2][1] = 2.0 * (tmp1 + tmp2) * invs;
+  mat[1][2] = 2.0 * (tmp1 - tmp2) * invs;
+
+  return mat;
+}
+
+void main() {
+
+  vec3 pos = position;
+  pos.z = mod( position.z + ( u_time * 1. * a_speed * 100. + u_delta + a_offset ) + 1000., 2000. ) - 1000.;
+
+  vec4 mvPosition = modelViewMatrix * vec4( pos, 1.0 );
+
+  gl_PointSize = ( 4000.0 / length( mvPosition.xyz ) );
+  gl_Position = projectionMatrix * mvPosition;
+
+  vPos = pos;
+  vAlpha = a_alpha;
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+    #define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+    return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    color = max( vec3( 0.0 ), color - 0.004 );
+    return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+    return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+    return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+    return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+    return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+    float maxComponent = max( max( value.r, value.g ), value.b );
+    float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+    return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+    M            = ceil( M * 255.0 ) / 255.0;
+    return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float D      = max( maxRange / maxRGB, 1.0 );
+    D            = min( floor( D ) / 255.0, 1.0 );
+    return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+    vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+    Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+    vec4 vResult;
+    vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+    float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+    vResult.w = fract(Le);
+    vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+    return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+    float Le = value.z * 255.0 + value.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+    Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+    vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+    return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+#define GLSLIFY 1
+uniform sampler2D t_mask;
+uniform float u_time;
+
+varying vec3 vPos;
+varying float vAlpha;
+
+float map(float value, float inMin, float inMax, float outMin, float outMax) {
+  return outMin + (outMax - outMin) * (value - inMin) / (inMax - inMin);
+}
+
+void main() {
+
+  vec4 mask_texture = texture2D(t_mask, gl_PointCoord);
+
+  vec3 color = vec3(1.);
+
+  float distanceAlpha = abs( min( 1., max( 0., map( abs(vPos.z), 0., 900., 0., 1. ) ) ) - 1. );
+  float alpha = distanceAlpha * mask_texture.r * vAlpha;
+
+  gl_FragColor = vec4(color, alpha);
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+    attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+    attribute vec3 morphTarget0;
+    attribute vec3 morphTarget1;
+    attribute vec3 morphTarget2;
+    attribute vec3 morphTarget3;
+    #ifdef USE_MORPHNORMALS
+        attribute vec3 morphNormal0;
+        attribute vec3 morphNormal1;
+        attribute vec3 morphNormal2;
+        attribute vec3 morphNormal3;
+    #else
+        attribute vec3 morphTarget4;
+        attribute vec3 morphTarget5;
+        attribute vec3 morphTarget6;
+        attribute vec3 morphTarget7;
+    #endif
+#endif
+#ifdef USE_SKINNING
+    attribute vec4 skinIndex;
+    attribute vec4 skinWeight;
+#endif
+
+#define GLSLIFY 1
+varying vec2 vUv;
+
+void main() {
+
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+    #define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+    return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    color = max( vec3( 0.0 ), color - 0.004 );
+    return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+    return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+    return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+    return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+    return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+    float maxComponent = max( max( value.r, value.g ), value.b );
+    float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+    return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+    M            = ceil( M * 255.0 ) / 255.0;
+    return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float D      = max( maxRange / maxRGB, 1.0 );
+    D            = min( floor( D ) / 255.0, 1.0 );
+    return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+    vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+    Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+    vec4 vResult;
+    vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+    float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+    vResult.w = fract(Le);
+    vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+    return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+    float Le = value.z * 255.0 + value.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+    Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+    vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+    return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+#define GLSLIFY 1
+#define PI 3.141592653589793
+#define PI_2 6.283185307179586
+
+uniform sampler2D t_diffuse;
+uniform float uFadeIn;
+uniform float uFadeOut;
+uniform float uDirection;
+uniform float uFisheye;
+uniform vec2 uResolution;
+
+varying vec2 vUv;
+
+//  Function from Iñigo Quiles
+//  www.iquilezles.org/www/articles/functions/functions.htm
+float cubicPulse( float c, float w, float x ){
+    x = abs(x - c);
+    if( x>w ) return 0.0;
+    x /= w;
+    return 1.0 - x*x*(3.0-2.0*x);
+}
+
+
+void main() {
+
+    vec3 scrollColor = vec3( cubicPulse( 0.5, uFadeIn, vUv.x ) - cubicPulse( 0.5, uFadeOut, vUv.x ) );
+    // vec3 scrollColor = vec3( smoothstep( .1, 1., cubicPulse( 0.5, uFadeIn, vUv.x ) - cubicPulse( 0.5, uFadeOut, vUv.x ) ) );
+
+    // float leftDisplacement = scrollColor.r * abs( step(0.5, vUv.x) - 1. ) * abs( step( 0.5, vUv.x ) * abs(step( 0.5, vUv.x ) - 1.) -1. ;
+    float leftDisplacement = scrollColor.r * abs( step(0.5, vUv.x) - 1. );
+    // float rightDisplacement = scrollColor.r * step(0.5, vUv.x) * -1. * abs( step( 0.5, vUv.x ) * abs(step( 0.5, vUv.x ) - 1.) -1. ;
+    float rightDisplacement = scrollColor.r * step(0.5, vUv.x) * -1.;
+
+    if(vUv.x == 0.5)
+    {
+        leftDisplacement = 0.;
+        rightDisplacement = 0.;
+    }
+
+    // vec4 diffuse = texture2D( t_diffuse, vec2(vUv.x + leftDisplacement + rightDisplacement, vUv.y) );
+    //
+    // vec3 color = diffuse.rgb;
+    // float alpha = 1.;
+    //
+    // gl_FragColor = vec4(color, alpha);
+    // gl_FragColor = vec4(scrollColor, alpha);
+
+    // float aspect = 1.;//screen proroption
+    // vec2 m = vec2(0.5, 0.5 / aspect);//center coords
+    // vec2 d = vUv - m;//vector from center to current fragment
+    // float r = sqrt(dot(d, d)); // distance of pixel from center
+    //
+    // float power = ( PI_2 / (4.0 * sqrt(dot(m, m))) ) * (0.5 / 1. * -0.8);//amount of effect
+    //
+    //
+    // float bind;//radius of 1:1 effect
+    // if(aspect < 1.0) bind = m.x; else bind = m.y;//stick to borders
+    //
+    // //Weird formulas
+    // vec2 newUv = m + normalize(d) * atan(r * -power * 5.0) * bind / atan(-power * bind * 5.0);
+    //
+    //
+    // vec3 col = texture2D(t_diffuse, vec2(newUv.x, -newUv.y * aspect)).xyz;//Second part of cheat
+    //                                                   //for round effect, not elliptical
+
+    float prop = uResolution.x / uResolution.y;//screen proroption
+    vec2 m = vec2(.5);//center coords
+    vec2 d = vUv - m;//vector from center to current fragment
+    float r = sqrt(dot(d, d)); // distance of pixel from center
+
+    float power = ( 2.0 * 3.141592 / (2.0 * sqrt(dot(m, m))) ) * (uFisheye - 0.5);//amount of effect
+
+    float bind;//radius of 1:1 effect
+    if (power > 0.0) bind = sqrt(dot(m, m));//stick to corners
+    else {if (prop < 1.0) bind = m.x; else bind = m.y;}//stick to borders
+
+    //Weird formulas
+    vec2 uv;
+    if (power > 0.0)//fisheye
+        uv = m + normalize(d) * tan(r * power) * bind / tan( bind * power);
+    else if (power < 0.0)//antifisheye
+        uv = m + normalize(d) * atan(r * -power * 10.0) * bind / atan(-power * bind * 10.0);
+    else uv = vUv;//no effect for power = 1.0
+
+    vec3 col = texture2D(t_diffuse, vec2(uv.x + leftDisplacement + rightDisplacement, uv.y)).xyz;//Second part of cheat
+                                                      //for round effect, not elliptical
+    gl_FragColor = vec4(col, 1.0);
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+	attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+	attribute vec3 morphTarget0;
+	attribute vec3 morphTarget1;
+	attribute vec3 morphTarget2;
+	attribute vec3 morphTarget3;
+	#ifdef USE_MORPHNORMALS
+		attribute vec3 morphNormal0;
+		attribute vec3 morphNormal1;
+		attribute vec3 morphNormal2;
+		attribute vec3 morphNormal3;
+	#else
+		attribute vec3 morphTarget4;
+		attribute vec3 morphTarget5;
+		attribute vec3 morphTarget6;
+		attribute vec3 morphTarget7;
+	#endif
+#endif
+#ifdef USE_SKINNING
+	attribute vec4 skinIndex;
+	attribute vec4 skinWeight;
+#endif
+
+#define GLSLIFY 1
+uniform vec2 uMouse;
+uniform vec2 uResolution;
+uniform float u_delta;
+uniform float u_time;
+uniform float uHide;
+uniform float uPress;
+
+attribute vec2 a_coordinates;
+attribute float a_direction;
+attribute float a_speed;
+attribute float a_select;
+attribute float a_radius;
+attribute float a_offset;
+attribute float a_press;
+
+varying vec3 vPos;
+varying vec2 vCoordinates;
+
+attribute vec3 a_hidePosition;
+
+mat3 quatToMatrix(vec4 q) {
+  mat3 mat;
+
+  float sqw = q.w * q.w;
+  float sqx = q.x * q.x;
+  float sqy = q.y * q.y;
+  float sqz = q.z * q.z;
+
+  // invs (inverse square length) is only required if quaternion is not already normalised
+  float invs = 1.0 / (sqx + sqy + sqz + sqw);
+  mat[0][0] = ( sqx - sqy - sqz + sqw) * invs; // since sqw + sqx + sqy + sqz =1/invs*invs
+  mat[1][1] = (-sqx + sqy - sqz + sqw) * invs;
+  mat[2][2] = (-sqx - sqy + sqz + sqw) * invs;
+
+  float tmp1 = q.x * q.y;
+  float tmp2 = q.z * q.w;
+  mat[1][0] = 2.0 * (tmp1 + tmp2) * invs;
+  mat[0][1] = 2.0 * (tmp1 - tmp2) * invs;
+
+  tmp1 = q.x * q.z;
+  tmp2 = q.y * q.w;
+  mat[2][0] = 2.0 * (tmp1 - tmp2) * invs;
+  mat[0][2] = 2.0 * (tmp1 + tmp2) * invs;
+  tmp1 = q.y * q.z;
+  tmp2 = q.x * q.w;
+  mat[2][1] = 2.0 * (tmp1 + tmp2) * invs;
+  mat[1][2] = 2.0 * (tmp1 - tmp2) * invs;
+
+  return mat;
+}
+
+void main() {
+
+  vec2 viewportMouse = ( uMouse * ( uResolution * 0.5 ) ) * -1.;
+
+  vec3 pos = position;
+  pos.x += cos(u_delta * 0.002 * a_speed) * a_radius;
+  pos.y += sin(u_delta * 0.002 * a_speed) * a_radius;
+  pos.z = mod( position.z + ( u_delta * -1. * a_speed ) + 1000. + a_offset, 2000. ) - 1000.;
+
+  vec3 stablePosition = position;
+  stablePosition.x += cos(u_time * 0.2) * 20.;
+  stablePosition.y += sin(u_time * 0.3) * 20.;
+  stablePosition.z += sin(u_time * 0.6) * 20.;
+
+  float dist = distance(pos.xy, viewportMouse);
+  float area = abs( smoothstep(0., 300., dist) - 1. );
+
+  stablePosition.x += 50. * sin( u_time * 10. * a_press) * area * a_direction * uPress;
+  stablePosition.y += 50. * sin( u_time * 10. * a_press) * area * a_direction * uPress;
+  stablePosition.z += 200. * cos( u_time * 10. * a_press) * area * a_direction * uPress;
+
+  pos = mix( mix(pos, stablePosition, a_select), a_hidePosition, uHide );
+
+  mat3 rotation = quatToMatrix( vec4( 0.,0.,1., sin(u_time * 0.2) * 0.01) );
+
+  vec4 mvPosition = modelViewMatrix * vec4( pos * rotation, 1.0 );
+
+  gl_PointSize = ( 3500.0 / length( mvPosition.xyz ) );
+  gl_Position = projectionMatrix * mvPosition;
+
+  vPos = pos;
+  vCoordinates = a_coordinates;
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+    #define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+    return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    color = max( vec3( 0.0 ), color - 0.004 );
+    return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+    return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+    return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+    return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+    return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+    float maxComponent = max( max( value.r, value.g ), value.b );
+    float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+    return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+    M            = ceil( M * 255.0 ) / 255.0;
+    return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float D      = max( maxRange / maxRGB, 1.0 );
+    D            = min( floor( D ) / 255.0, 1.0 );
+    return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+    vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+    Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+    vec4 vResult;
+    vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+    float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+    vResult.w = fract(Le);
+    vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+    return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+    float Le = value.z * 255.0 + value.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+    Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+    vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+    return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+#define GLSLIFY 1
+uniform sampler2D t_mask;
+uniform sampler2D tDiffuse;
+uniform float u_mask;
+uniform float u_time;
+uniform float u_progress;
+
+varying vec3 vPos;
+varying vec2 vCoordinates;
+
+float map(float value, float inMin, float inMax, float outMin, float outMax) {
+  return outMin + (outMax - outMin) * (value - inMin) / (inMax - inMin);
+}
+
+void main() {
+
+  vec4 mask_texture = texture2D(t_mask, gl_PointCoord);
+
+  vec2 st0 = vec2(vCoordinates.x / 2048., vCoordinates.y / 2048.);
+  vec4 diffuse0 = texture2D(tDiffuse, st0);
+
+  vec2 st1 = vec2( (vCoordinates.x + 512.) / 2048., vCoordinates.y / 2048.);
+  vec4 diffuse1 = texture2D(tDiffuse, st1);
+
+  vec2 st2 = vec2( (vCoordinates.x + 1024.) / 2048., vCoordinates.y / 2048.);
+  vec4 diffuse2 = texture2D(tDiffuse, st2);
+
+  vec2 st3 = vec2( (vCoordinates.x + 1536.) / 2048., vCoordinates.y / 2048.);
+  vec4 diffuse3 = texture2D(tDiffuse, st3);
+
+  vec2 st4 = vec2( vCoordinates.x / 2048., ( vCoordinates.y + 512. ) / 2048.);
+  vec4 diffuse4 = texture2D(tDiffuse, st4);
+
+  vec2 st5 = vec2( (vCoordinates.x + 512.) / 2048., ( vCoordinates.y + 512. ) / 2048.);
+  vec4 diffuse5 = texture2D(tDiffuse, st5);
+
+  vec2 st6 = vec2( (vCoordinates.x + 1024.) / 2048., ( vCoordinates.y + 512. ) / 2048.);
+  vec4 diffuse6 = texture2D(tDiffuse, st6);
+
+
+  vec4 diffuse = diffuse0 * ( 1. - smoothstep(0.,1.,u_progress) + smoothstep( 6., 7., u_progress) ) +
+               diffuse1 * ( smoothstep(0.,1.,u_progress) - smoothstep(1.,2.,u_progress) ) +
+               diffuse2 * ( smoothstep(1.,2.,u_progress) - smoothstep(2.,3.,u_progress) ) +
+               diffuse3 * ( smoothstep(2.,3.,u_progress) - smoothstep(3., 4., u_progress) ) +
+               diffuse4 * ( smoothstep(3.,4.,u_progress) - smoothstep(4., 5., u_progress) ) +
+               diffuse5 * ( smoothstep(4.,5.,u_progress) - smoothstep(5., 6., u_progress) ) +
+               diffuse6 * ( smoothstep(5.,6.,u_progress) - smoothstep(6., 7., u_progress) );
+
+  vec3 color = diffuse.rgb;
+
+  float distanceAlpha = abs( min( 1., max( 0., map( abs(vPos.z), 0., 900., 0., 1. ) ) ) - 1. );
+  float maskTextureAlpha = min( 1., mask_texture.r + abs( u_mask - 1. ) );
+
+  float pixelAlpha = diffuse.a;
+  float alpha = distanceAlpha * maskTextureAlpha * pixelAlpha;
+
+  gl_FragColor = vec4(color, alpha);
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+
+__ENDPROGRAM__
+__BEGINPROGRAM__
+__VERTEXSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define VERTEX_TEXTURES
+#define GAMMA_FACTOR 2
+#define MAX_BONES 0
+#define BONE_TEXTURE
+#define NUM_CLIPPING_PLANES 0
+uniform mat4 modelMatrix;
+uniform mat4 modelViewMatrix;
+uniform mat4 projectionMatrix;
+uniform mat4 viewMatrix;
+uniform mat3 normalMatrix;
+uniform vec3 cameraPosition;
+attribute vec3 position;
+attribute vec3 normal;
+attribute vec2 uv;
+#ifdef USE_COLOR
+    attribute vec3 color;
+#endif
+#ifdef USE_MORPHTARGETS
+    attribute vec3 morphTarget0;
+    attribute vec3 morphTarget1;
+    attribute vec3 morphTarget2;
+    attribute vec3 morphTarget3;
+    #ifdef USE_MORPHNORMALS
+        attribute vec3 morphNormal0;
+        attribute vec3 morphNormal1;
+        attribute vec3 morphNormal2;
+        attribute vec3 morphNormal3;
+    #else
+        attribute vec3 morphTarget4;
+        attribute vec3 morphTarget5;
+        attribute vec3 morphTarget6;
+        attribute vec3 morphTarget7;
+    #endif
+#endif
+#ifdef USE_SKINNING
+    attribute vec4 skinIndex;
+    attribute vec4 skinWeight;
+#endif
+
+#define GLSLIFY 1
+uniform float uTime;
+uniform vec2 uOffset;
+varying vec2 vUv;
+
+mat3 quatToMatrix(vec4 q) {
+  mat3 mat;
+
+  float sqw = q.w * q.w;
+  float sqx = q.x * q.x;
+  float sqy = q.y * q.y;
+  float sqz = q.z * q.z;
+
+  // invs (inverse square length) is only required if quaternion is not already normalised
+  float invs = 1.0 / (sqx + sqy + sqz + sqw);
+  mat[0][0] = ( sqx - sqy - sqz + sqw) * invs; // since sqw + sqx + sqy + sqz =1/invs*invs
+  mat[1][1] = (-sqx + sqy - sqz + sqw) * invs;
+  mat[2][2] = (-sqx - sqy + sqz + sqw) * invs;
+
+  float tmp1 = q.x * q.y;
+  float tmp2 = q.z * q.w;
+  mat[1][0] = 2.0 * (tmp1 + tmp2) * invs;
+  mat[0][1] = 2.0 * (tmp1 - tmp2) * invs;
+
+  tmp1 = q.x * q.z;
+  tmp2 = q.y * q.w;
+  mat[2][0] = 2.0 * (tmp1 - tmp2) * invs;
+  mat[0][2] = 2.0 * (tmp1 + tmp2) * invs;
+  tmp1 = q.y * q.z;
+  tmp2 = q.x * q.w;
+  mat[2][1] = 2.0 * (tmp1 + tmp2) * invs;
+  mat[1][2] = 2.0 * (tmp1 - tmp2) * invs;
+
+  return mat;
+}
+
+
+void main() {
+
+  vUv = uv;
+
+  vec3 pos = position;
+  pos.z += cos(uTime * 0.2) * 1.;
+  pos.y += sin(uTime * 0.2) * .2 + uOffset.y;
+  pos.x += sin(uTime * 0.5) * .02 + uOffset.x;
+
+
+  gl_Position = projectionMatrix * modelViewMatrix * vec4(pos, 1.0);
+  // gl_Position.z += cos(uTime * 0.1) * -10.;
+  // gl_Position.y += sin(uTime * 0.2) * 10.;
+  // gl_Position.x += sin(uTime * 0.5) * 10.;
+  gl_Position.x += CONST_SHADER_RECACHE;
+}
+
+
+__FRAGMENTSHADER__
+precision highp float;
+precision highp int;
+#define SHADER_NAME ShaderMaterial
+#define GAMMA_FACTOR 2
+#define NUM_CLIPPING_PLANES 0
+#define UNION_CLIPPING_PLANES 0
+uniform mat4 viewMatrix;
+uniform vec3 cameraPosition;
+#define TONE_MAPPING
+#ifndef saturate
+    #define saturate(a) clamp( a, 0.0, 1.0 )
+#endif
+uniform float toneMappingExposure;
+uniform float toneMappingWhitePoint;
+vec3 LinearToneMapping( vec3 color ) {
+    return toneMappingExposure * color;
+}
+vec3 ReinhardToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( color / ( vec3( 1.0 ) + color ) );
+}
+#define Uncharted2Helper( x ) max( ( ( x * ( 0.15 * x + 0.10 * 0.50 ) + 0.20 * 0.02 ) / ( x * ( 0.15 * x + 0.50 ) + 0.20 * 0.30 ) ) - 0.02 / 0.30, vec3( 0.0 ) )
+vec3 Uncharted2ToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    return saturate( Uncharted2Helper( color ) / Uncharted2Helper( vec3( toneMappingWhitePoint ) ) );
+}
+vec3 OptimizedCineonToneMapping( vec3 color ) {
+    color *= toneMappingExposure;
+    color = max( vec3( 0.0 ), color - 0.004 );
+    return pow( ( color * ( 6.2 * color + 0.5 ) ) / ( color * ( 6.2 * color + 1.7 ) + 0.06 ), vec3( 2.2 ) );
+}
+
+vec3 toneMapping( vec3 color ) { return LinearToneMapping( color ); }
+
+vec4 LinearToLinear( in vec4 value ) {
+    return value;
+}
+vec4 GammaToLinear( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( gammaFactor ) ), value.w );
+}
+vec4 LinearToGamma( in vec4 value, in float gammaFactor ) {
+    return vec4( pow( value.xyz, vec3( 1.0 / gammaFactor ) ), value.w );
+}
+vec4 sRGBToLinear( in vec4 value ) {
+    return vec4( mix( pow( value.rgb * 0.9478672986 + vec3( 0.0521327014 ), vec3( 2.4 ) ), value.rgb * 0.0773993808, vec3( lessThanEqual( value.rgb, vec3( 0.04045 ) ) ) ), value.w );
+}
+vec4 LinearTosRGB( in vec4 value ) {
+    return vec4( mix( pow( value.rgb, vec3( 0.41666 ) ) * 1.055 - vec3( 0.055 ), value.rgb * 12.92, vec3( lessThanEqual( value.rgb, vec3( 0.0031308 ) ) ) ), value.w );
+}
+vec4 RGBEToLinear( in vec4 value ) {
+    return vec4( value.rgb * exp2( value.a * 255.0 - 128.0 ), 1.0 );
+}
+vec4 LinearToRGBE( in vec4 value ) {
+    float maxComponent = max( max( value.r, value.g ), value.b );
+    float fExp = clamp( ceil( log2( maxComponent ) ), -128.0, 127.0 );
+    return vec4( value.rgb / exp2( fExp ), ( fExp + 128.0 ) / 255.0 );
+}
+vec4 RGBMToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.xyz * value.w * maxRange, 1.0 );
+}
+vec4 LinearToRGBM( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float M      = clamp( maxRGB / maxRange, 0.0, 1.0 );
+    M            = ceil( M * 255.0 ) / 255.0;
+    return vec4( value.rgb / ( M * maxRange ), M );
+}
+vec4 RGBDToLinear( in vec4 value, in float maxRange ) {
+    return vec4( value.rgb * ( ( maxRange / 255.0 ) / value.a ), 1.0 );
+}
+vec4 LinearToRGBD( in vec4 value, in float maxRange ) {
+    float maxRGB = max( value.x, max( value.g, value.b ) );
+    float D      = max( maxRange / maxRGB, 1.0 );
+    D            = min( floor( D ) / 255.0, 1.0 );
+    return vec4( value.rgb * ( D * ( 255.0 / maxRange ) ), D );
+}
+const mat3 cLogLuvM = mat3( 0.2209, 0.3390, 0.4184, 0.1138, 0.6780, 0.7319, 0.0102, 0.1130, 0.2969 );
+vec4 LinearToLogLuv( in vec4 value )  {
+    vec3 Xp_Y_XYZp = value.rgb * cLogLuvM;
+    Xp_Y_XYZp = max(Xp_Y_XYZp, vec3(1e-6, 1e-6, 1e-6));
+    vec4 vResult;
+    vResult.xy = Xp_Y_XYZp.xy / Xp_Y_XYZp.z;
+    float Le = 2.0 * log2(Xp_Y_XYZp.y) + 127.0;
+    vResult.w = fract(Le);
+    vResult.z = (Le - (floor(vResult.w*255.0))/255.0)/255.0;
+    return vResult;
+}
+const mat3 cLogLuvInverseM = mat3( 6.0014, -2.7008, -1.7996, -1.3320, 3.1029, -5.7721, 0.3008, -1.0882, 5.6268 );
+vec4 LogLuvToLinear( in vec4 value ) {
+    float Le = value.z * 255.0 + value.w;
+    vec3 Xp_Y_XYZp;
+    Xp_Y_XYZp.y = exp2((Le - 127.0) / 2.0);
+    Xp_Y_XYZp.z = Xp_Y_XYZp.y / value.y;
+    Xp_Y_XYZp.x = value.x * Xp_Y_XYZp.z;
+    vec3 vRGB = Xp_Y_XYZp.rgb * cLogLuvInverseM;
+    return vec4( max(vRGB, 0.0), 1.0 );
+}
+
+vec4 mapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 envMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 emissiveMapTexelToLinear( vec4 value ) { return LinearToLinear( value ); }
+vec4 linearToOutputTexel( vec4 value ) { return LinearToLinear( value ); }
+
+#define GLSLIFY 1
+uniform sampler2D tDiffuse;
+uniform sampler2D tMask;
+
+varying vec2 vUv;
+
+void main() {
+
+  vec4 maskTexture = texture2D(tMask, vUv);
+  vec4 texture = texture2D(tDiffuse, vec2(vUv.x + abs( maskTexture.r - 1. ) * 0.21, vUv.y));
+  // vec4 texture = texture2D(tDiffuse, vec2(vUv.x + abs( maskTexture.r - 1. ) * 0.05 + abs( maskTexture.g - 1. ) * -0.05, vUv.y));
+
+  vec3 color = texture.rgb;
+  float alpha = texture.a * maskTexture.r;
+  // float alpha = texture.a * max( maskTexture.r, maskTexture.g );
+
+  gl_FragColor = vec4(color, alpha);
+  // gl_FragColor = maskTexture;
+  gl_FragColor.x += CONST_SHADER_RECACHE;
+}
+
+
+__ENDPROGRAM__
